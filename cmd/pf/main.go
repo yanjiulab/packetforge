@@ -3,6 +3,7 @@ package main
 
 import (
 	"flag"
+	"strings"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -11,6 +12,65 @@ import (
 	"github.com/yanjiulab/packetforge/pkg/pdl"
 	"github.com/yanjiulab/packetforge/pkg/psl"
 )
+
+// FormatTCPDump converts binary buffer to tcpdump-style string
+// Parameters:
+//   buf: binary data to format
+//   startOffset: starting address offset (e.g. 0 for 0x0000:)
+// Returns:
+//   tcpdump-style formatted string (each line: offset + hex + ASCII)
+func FormatTCPDump(buf []byte, startOffset int) string {
+	const bytesPerLine = 16 // tcpdump default: 16 bytes per line
+	var dumpBuilder strings.Builder // Build final output string
+	offset := startOffset           // Current address offset
+
+	// Iterate buffer by 16-byte chunks
+	for i := 0; i < len(buf); i += bytesPerLine {
+		end := i + bytesPerLine
+		if end > len(buf) {
+			end = len(buf)
+		}
+		lineBytes := buf[i:end]
+
+		// 1. Build offset prefix (e.g. 0x0000:)
+		offsetStr := fmt.Sprintf("0x%04x:", offset)
+		dumpBuilder.WriteString(offsetStr)
+		dumpBuilder.WriteString("  ")
+
+		// 2. Build hex part (8 bytes + 2 spaces + 8 bytes)
+		hexParts := make([]string, bytesPerLine)
+		for j, b := range lineBytes {
+			hexParts[j] = fmt.Sprintf("%02x", b)
+		}
+		// Fill empty slots for alignment (for last line)
+		for j := len(lineBytes); j < bytesPerLine; j++ {
+			hexParts[j] = "  "
+		}
+		// Split into two groups (8 bytes each) for readability
+		hexStr := strings.Join(hexParts[:8], " ") + "  " + strings.Join(hexParts[8:], " ")
+		dumpBuilder.WriteString(hexStr)
+		dumpBuilder.WriteString("  ")
+
+		// 3. Build ASCII part (printable chars or '.')
+		for _, b := range lineBytes {
+			if b >= 32 && b <= 126 { // Printable ASCII range
+				dumpBuilder.WriteByte(b)
+			} else {
+				dumpBuilder.WriteByte('.')
+			}
+		}
+
+		// 4. Add newline (except for last line)
+		if i + bytesPerLine < len(buf) {
+			dumpBuilder.WriteString("\n")
+		}
+
+		// Update offset for next line
+		offset += bytesPerLine
+	}
+
+	return dumpBuilder.String()
+}
 
 func main() {
 	pdlDir := flag.String("proto", "proto", "Protocol definition directory (.pdl files)")
@@ -49,7 +109,7 @@ func main() {
 
 	sendFn := func(data []byte) error {
 		if *dryRun {
-			fmt.Printf("[dry-run] Send %d bytes\n: %v\n", len(data), data)
+			fmt.Printf("[dry-run] Send %d bytes:\n%s\n", len(data), FormatTCPDump(data, 0))
 			return nil
 		}
 		return nil

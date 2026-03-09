@@ -39,7 +39,13 @@ You can prefix a block with `async` to run it in a background goroutine without 
 ## 2. Usage
 
 ### Installation
-Ensure you have Go installed, then clone and build the project:
+
+Download `packetforge` from `go install`:
+```bash
+go install github.com/yanjiulab/packetforge/cmd/pf@latest
+```
+
+Or clone and build the project:
 ```bash
 git clone https://github.com/yanjiulab/packetforge.git
 cd packetforge
