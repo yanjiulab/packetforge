@@ -1,0 +1,12 @@
+// IPv6 协议头（固定 40 字节）
+// 这里用 ver_tc_fl(u32) 避免 bit-field 组合复杂度：
+// - 默认 0x60000000 表示 version=6，其余位为 0
+protocol ipv6 {
+  ver_tc_fl   u32 = 0x60000000
+  payload_len u16 = $payload_len
+  next_header u8  = 59   // 59 = No Next Header（便于仅演示 IPv6 + payload）
+  hop_limit   u8  = 64
+  src         ipv6
+  dst         ipv6
+}
+

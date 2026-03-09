@@ -1,0 +1,23 @@
+// async 块使用有限次 @repeat，便于测试「块先于主线结束」（中括号内包含负载）
+async {
+  [
+    eth(dst=00:11:22:33:44:55, src=66:77:88:99:AA:BB)
+    ip(src=192.168.1.10, dst=192.168.1.20)
+    udp(sport=53, dport=54)
+    `hello`
+  ]
+  @repeat 3
+  @interval 100ms
+}
+@repeat 3
+@interval 1s
+
+// 主线在 async 启动后立即执行
+[
+  eth(dst=00:50:56:00:00:01, src=00:50:56:00:00:02)
+  ip(src=10.0.0.1, dst=10.0.0.2)
+  icmp()
+  `x 08000000`
+]
+@repeat 2
+@interval 10s

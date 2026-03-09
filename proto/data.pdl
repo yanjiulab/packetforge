@@ -1,0 +1,3 @@
+// 占位协议：无头部，仅用于 PSL 中 data() 表示负载层
+protocol data {
+}

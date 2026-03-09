@@ -1,0 +1,22 @@
+// async 块：后台心跳 + 主线报文（中括号内包含负载）
+// 1. 后台 ICMP 心跳（@repeat forever，不阻塞）
+async {
+  [
+    eth(dst=FF:FF:FF:FF:FF:FF, src=00:11:22:33:44:55)
+    ip(src=192.168.1.100, dst=192.168.1.1)
+    icmp()
+    `x 0800000012345678`
+  ]
+  @repeat forever
+  @interval 1s
+}
+
+// 2. 主线：TCP 报文发 5 次后脚本结束（async 会随进程退出）
+[
+  eth(dst=00:50:56:00:00:01, src=00:50:56:00:00:02)
+  ip(src=10.0.0.1, dst=10.0.0.2)
+  tcp(sport=2000, dport=80)
+  `GET / HTTP/1.0`
+]
+@repeat 5
+@interval 200ms

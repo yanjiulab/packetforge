@@ -1,0 +1,12 @@
+// TCP 协议头（20 字节）
+protocol tcp {
+	sport    u16
+	dport    u16
+	seq      u32 = 0
+	ack      u32 = 0
+	data_res u8  = 0x50  // 数据偏移 5（20 字节头）+ 保留
+	flags    u8  = 0
+	window   u16 = 65535
+	checksum u16 = $cksum
+	urgent   u16 = 0
+}

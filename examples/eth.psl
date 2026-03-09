@@ -1,0 +1,12 @@
+eth(dst=ff:ff:ff:ff:ff:ff,src=00:11:22:33:44:55,type=0x0885)
+@repeat 3
+@interval 10ms
+
+async {
+    eth(dst=00:11:22:33:44:55, src=ff:ff:ff:ff:ff:ff, type=0x0886)
+    @repeat 2 @interval 1s
+}
+
+eth(dst=00:11:22:33:44:66, src=66:77:88:99:AA:BB, type=0x0885)
+@repeat 3
+@interval 1s

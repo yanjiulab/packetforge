@@ -1,0 +1,36 @@
+// PIM Join/Prune 示例：测试动态数组 [field]type 的自动长度回填
+// 这里的地址格式已经更新为 Encoded-Unicast, Encoded-Group, Encoded-Source Address 格式
+[
+  eth(dst=01:00:5E:00:00:0D, src=00:50:56:00:00:02, type=0x0800)
+  ip(src=192.168.1.1, dst=224.0.0.13, ttl=1)
+  pim_jp(
+    // up_family 和 up_encode 在 pdl 中已有默认值 (IPv4=1, Native=0)，可以省略
+    upstream=192.168.1.254,
+    // num_groups 字段可以省略，将由 Builder 自动计算 groups 的长度并回填
+    groups=[
+      {
+        // 组播地址，包含 grp_family, grp_encode, grp_reserved, grp_mask_len 等字段
+        grp_mask_len=32,
+        group_addr=239.1.1.1,
+        
+        // num_joined / num_pruned 同样由于是 [field]type，也将自动回填
+        joined=[
+          { flags=4, mask_len=32, addr=10.0.0.1 }, // flags=4 表示 S-bit=1 (Sparse Mode)
+          { flags=4, mask_len=32, addr=10.0.0.2 }
+        ],
+        pruned=[
+          { flags=4, mask_len=32, addr=10.0.0.3 }
+        ]
+      },
+      {
+        grp_mask_len=24,
+        group_addr=239.1.1.0,
+        joined=[
+          { flags=4, mask_len=32, addr=10.0.0.4 }
+        ],
+        pruned=[]
+      }
+    ]
+  )
+  ``
+]

@@ -1,0 +1,10 @@
+// PIM Hello 示例：发送动态数组选项 []pim_hello_opt
+[
+  eth(dst=01:00:5E:00:00:0D, src=00:50:56:00:00:02, type=0x0800)
+  ip(src=192.168.1.1, dst=224.0.0.13, ttl=1)
+  pim_hello(opts=[
+    { type=1, len=2, val=0x000D0000 },  // Holdtime
+    { type=19, len=4, val=0x00000001 }  // DR Priority
+  ])
+  ``
+]

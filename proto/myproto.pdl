@@ -1,0 +1,5 @@
+protocol myproto {
+    magic u32 = 0xdeadbeef
+    len u8 = $payload_len
+    reserved u16 = 0
+}

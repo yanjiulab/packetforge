@@ -1,0 +1,8 @@
+// ICMP 协议头（前 8 字节）
+protocol icmp {
+	type     u8  = 8
+	code     u8  = 0
+	checksum u16 = $cksum
+	id       u16 = 0
+	seq      u16 = 0
+}

@@ -1,0 +1,8 @@
+// 测试结构体嵌套 (TypeStructRef)
+[
+  eth(dst=00:50:56:00:00:01, src=00:50:56:00:00:02, type=0x0800)
+  shape(
+    shape_type=2,
+    center={ x=100, y=200 }
+  )
+]

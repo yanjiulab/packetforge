@@ -1,0 +1,11 @@
+// 重复结构示例：RIP 协议，entries 为 []rip_entry
+[
+  eth(dst=00:50:56:00:00:01, src=00:50:56:00:00:02, type=0x0800)
+  ip(src=192.168.1.1, dst=224.0.0.9, protocol=17, ttl=1)
+  udp(sport=520, dport=520)
+  rip(entries=[
+    { afi=2, addr=10.0.0.0, mask=255.0.0.0, next_hop=0.0.0.0, metric=1 },
+    { afi=2, addr=192.168.0.0, mask=255.255.0.0, next_hop=0.0.0.0, metric=2 }
+  ])
+  ``
+]

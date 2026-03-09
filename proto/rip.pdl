@@ -1,0 +1,17 @@
+// RIP 路由表项（重复结构）
+struct rip_entry {
+  afi       u16  = 2
+  route_tag u16  = 0
+  addr      ipv4
+  mask      ipv4
+  next_hop  ipv4
+  metric    u32
+}
+
+// RIP 协议（含重复条目数组）
+protocol rip {
+  cmd     u8 = 2
+  version u8 = 2
+  reserve u16 = 0
+  entries []rip_entry
+}

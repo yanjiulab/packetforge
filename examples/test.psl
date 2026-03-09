@@ -1,0 +1,18 @@
+const TARGET = 192.168.1.100
+
+// Background ping (runs asynchronously)
+async {
+  [eth() ip(dst=TARGET, src=TARGET) icmp() `ping`]
+  @repeat forever
+  @interval 1s
+}
+
+// Mainline TCP stream
+[
+  eth()
+  ip(src=TARGET, dst=TARGET, id=$seq(1, 1))
+  tcp(sport=1234, dport=80)
+  `GET / HTTP/1.1\r\n\r\n`
+]
+@repeat 10
+@interval 100ms

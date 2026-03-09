@@ -1,0 +1,11 @@
+// 内层嵌套结构
+struct point {
+    x u32
+    y u32
+}
+
+// 包含嵌套结构的自定义协议
+protocol shape {
+    shape_type u8 = 1
+    center     point
+}

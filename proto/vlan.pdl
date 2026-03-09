@@ -1,0 +1,5 @@
+// 802.1Q VLAN 标签
+protocol vlan {
+	tci   u16 = 0
+	type  u16 = 0x0800
+}

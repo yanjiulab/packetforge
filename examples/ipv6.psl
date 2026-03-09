@@ -1,0 +1,8 @@
+// IPv6 示例：仅 IPv6 头 + 负载（不依赖 TCP/UDP 校验和）
+[
+  eth(dst=00:50:56:00:00:01, src=00:50:56:00:00:02, type=0x86dd)
+  ipv6(src=2001:db8::1, dst=2001:db8::2)
+  data()
+  `hello ipv6`
+]
+

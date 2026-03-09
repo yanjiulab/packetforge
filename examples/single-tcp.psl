@@ -1,0 +1,7 @@
+// 单条 TCP 报文，带完整四层（中括号内包含负载，仿照真实数据包填写字段）
+[
+  eth(dst=00:11:22:33:44:55, src=66:77:88:99:AA:BB)
+  ip(src=192.168.1.1, dst=192.168.1.2, ttl=64)
+  tcp(sport=12345, dport=80)
+  `GET / HTTP/1.1\r\nHost: example.com\r\n\r\n`
+]

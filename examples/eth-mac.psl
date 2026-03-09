@@ -1,0 +1,14 @@
+// 以太网 MAC 示例：全 F 广播、普通 MAC（中括号内包含负载，显式填写 ip/tcp/udp 必填字段）
+[
+  eth(dst=FF:FF:FF:FF:FF:FF, src=00:00:00:00:00:01)
+  ip(src=192.168.1.1, dst=192.168.1.255)
+  tcp(sport=80, dport=80)
+  `broadcast`
+]
+
+[
+  eth(dst=01:02:03:04:05:06, src=AA:BB:CC:DD:EE:FF)
+  ip(src=192.168.1.10, dst=192.168.1.20)
+  udp(sport=54, dport=54)
+  `unicast`
+]

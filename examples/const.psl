@@ -1,0 +1,11 @@
+// 常量定义示例：简化地址/常用值的书写
+const BRD = FF:FF:FF:FF:FF:FF
+const LOCAL_IP = 192.168.1.100
+const TARGET_IP = 192.168.1.200
+
+[
+  eth(dst=BRD, src=00:50:56:00:00:02, type=0x0800)
+  ip(src=LOCAL_IP, dst=TARGET_IP)
+  udp(sport=1234, dport=5678)
+  `ping`
+]

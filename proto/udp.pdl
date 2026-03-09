@@ -1,0 +1,7 @@
+// UDP 协议头
+protocol udp {
+	sport    u16
+	dport    u16
+	length   u16 = $len
+	checksum u16 = $cksum
+}

@@ -1,0 +1,12 @@
+// ARP 协议（简化：以太网 + IPv4）
+protocol arp {
+	htype    u16 = 1
+	ptype    u16 = 0x0800
+	hlen     u8  = 6
+	plen     u8  = 4
+	oper     u16 = 1
+	sha      mac
+	spa      ipv4
+	tha      mac
+	tpa      ipv4
+}

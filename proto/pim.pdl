@@ -1,0 +1,54 @@
+// PIM Hello Option
+struct pim_hello_opt {
+    type u16
+    len  u16
+    val  u32
+}
+
+// PIM Hello 协议
+protocol pim_hello {
+    version_type u8 = 0x20
+    reserved     u8 = 0
+    checksum     u16 = $cksum
+    opts         []pim_hello_opt
+}
+
+// PIM Encoded-Source Address (IPv4)
+struct pim_source {
+    family   u8 = 1     // IPv4 = 1
+    encode   u8 = 0     // Native = 0
+    flags    u8 = 4     // S=1 (Sparse bit)
+    mask_len u8 = 32
+    addr     ipv4
+}
+
+// PIM Join/Prune Group Record
+struct pim_jp_group {
+    // Encoded-Group Address (IPv4)
+    grp_family   u8 = 1
+    grp_encode   u8 = 0
+    grp_reserved u8 = 0
+    grp_mask_len u8 = 32
+    group_addr   ipv4
+
+    num_joined u16 = 0
+    num_pruned u16 = 0
+    joined     [num_joined]pim_source
+    pruned     [num_pruned]pim_source
+}
+
+// PIM Join/Prune 协议
+protocol pim_jp {
+    version_type u8 = 0x23
+    reserved     u8 = 0
+    checksum     u16 = $cksum
+    // Encoded-Unicast Address (IPv4)
+    up_family    u8 = 1
+    up_encode    u8 = 0
+    upstream     ipv4
+
+    reserved2    u8 = 0
+    num_groups   u8 = 0
+    hold_time    u16 = 210
+    groups       [num_groups]pim_jp_group
+}
