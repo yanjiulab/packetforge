@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"github.com/yanjiulab/packetforge/pkg/engine"
 	"github.com/yanjiulab/packetforge/pkg/packet"
 	"github.com/yanjiulab/packetforge/pkg/pdl"
@@ -72,12 +73,38 @@ func FormatTCPDump(buf []byte, startOffset int) string {
 	return dumpBuilder.String()
 }
 
+var (
+	Version = "dev"
+	Commit  = "none"
+	Date    = "unknown"
+	BuiltBy = "unknown"
+)
+
+// String returns a human-friendly version string.
+func VersionString() string {
+	return fmt.Sprintf(
+		"packetforge %s (commit=%s, date=%s, builtBy=%s, go=%s)",
+		Version,
+		Commit,
+		Date,
+		BuiltBy,
+		runtime.Version(),
+	)
+}
+
+
 func main() {
 	pdlDir := flag.String("proto", "proto", "Protocol definition directory (.pdl files)")
 	pslFile := flag.String("stream", "", "Packet stream language file (required)")
 	iface := flag.String("iface", "lo", "Network interface to send packets (e.g. eth0, lo)")
 	dryRun := flag.Bool("dry-run", false, "Parse and build packets only, do not actually send")
+	printVersion := flag.Bool("version", false, "print version and exit")
 	flag.Parse()
+
+	if *printVersion {
+		fmt.Println(VersionString())
+		return
+	}
 
 	if *pslFile == "" {
 		fmt.Fprintf(os.Stderr, "Usage: %s -stream <script.psl> [-proto dir] [-iface interface] [-dry-run]\n", filepath.Base(os.Args[0]))

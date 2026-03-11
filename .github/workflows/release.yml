@@ -1,0 +1,108 @@
+name: release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-release:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Linux
+          - goos: linux
+            goarch: amd64
+          - goos: linux
+            goarch: arm64
+          - goos: linux
+            goarch: arm
+            goarm: "7"
+
+          # macOS
+          # - goos: darwin
+          #   goarch: amd64
+          # - goos: darwin
+          #   goarch: arm64
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          check-latest: true
+
+      - name: Prepare build metadata
+        id: meta
+        shell: bash
+        run: |
+          set -euo pipefail
+          VERSION="${GITHUB_REF_NAME}"
+          COMMIT="${GITHUB_SHA}"
+          DATE="$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "commit=${COMMIT}" >> "$GITHUB_OUTPUT"
+          echo "date=${DATE}" >> "$GITHUB_OUTPUT"
+
+      - name: Build (packetforge + packetforged)
+        shell: bash
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          GOARM: ${{ matrix.goarm }}
+          CGO_ENABLED: "0"
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+
+          VERSION="${{ steps.meta.outputs.version }}"
+          COMMIT="${{ steps.meta.outputs.commit }}"
+          DATE="${{ steps.meta.outputs.date }}"
+
+          # ldflags version injection
+          LDFLAGS="-s -w \
+            -X github.com/yanjiulab/packetforge/internal/version.Version=${VERSION} \
+            -X github.com/yanjiulab/packetforge/internal/version.Commit=${COMMIT} \
+            -X github.com/yanjiulab/packetforge/internal/version.Date=${DATE} \
+            -X github.com/yanjiulab/packetforge/internal/version.BuiltBy=github-actions"
+
+          EXT=""
+          if [[ "${GOOS}" == "windows" ]]; then
+            EXT=".exe"
+          fi
+
+          OUTDIR="dist/${VERSION}_${GOOS}_${GOARCH}"
+          if [[ -n "${GOARM:-}" ]]; then
+            OUTDIR="${OUTDIR}v${GOARM}"
+          fi
+          mkdir -p "${OUTDIR}"
+
+          go build -trimpath -ldflags "${LDFLAGS}" -o "${OUTDIR}/packetforge${EXT}" ./cmd/packetforge
+
+          pushd dist >/dev/null
+          BASENAME="$(basename "${OUTDIR}")"
+          if [[ "${GOOS}" == "windows" ]]; then
+            zip -qr "${BASENAME}.zip" "${BASENAME}"
+          else
+            tar -czf "${BASENAME}.tar.gz" "${BASENAME}"
+          fi
+          popd >/dev/null
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: ${{ github.ref_name }}
+          generate_release_notes: true
+          files: |
+            dist/*.tar.gz
+            dist/*.zip
+
