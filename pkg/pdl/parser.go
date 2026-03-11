@@ -206,16 +206,6 @@ func (p *Parser) parseType() (FieldType, int, string, ArrayKind, int, string, er
 		return TypeIPv4, 0, "", ArrayNone, 0, "", nil
 	case "ipv6":
 		return TypeIPv6, 0, "", ArrayNone, 0, "", nil
-	case "bytes":
-		return TypeBytes, 0, "", ArrayNone, 0, "", nil
-	}
-	if strings.HasPrefix(s, "byte[") && strings.HasSuffix(s, "]") {
-		inner := s[5 : len(s)-1]
-		n, err := strconv.Atoi(inner)
-		if err != nil || n <= 0 {
-			return 0, 0, "", ArrayNone, 0, "", fmt.Errorf("invalid byte[N] size: %s", inner)
-		}
-		return TypeByteN, n, "", ArrayNone, 0, "", nil
 	}
 	// If not a built-in type, treat it as StructName (nested structure)
 	// Note: s was lowercased earlier, p.tok.Raw is the original token. But we advanced when assigning s,

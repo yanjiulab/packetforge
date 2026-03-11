@@ -145,10 +145,6 @@ func (b *Builder) protocolFixedSize(proto *pdl.Protocol, kv map[string]psl.Value
 			n += 4
 		case pdl.TypeIPv6:
 			n += 16
-		case pdl.TypeByteN:
-			n += f.ByteSize
-		case pdl.TypeBytes:
-			// Variable length
 		case pdl.TypeStructRef:
 			st := b.Registry.GetStruct(f.StructName)
 			if st == nil {
@@ -218,10 +214,6 @@ func (b *Builder) structFixedSize(st *pdl.Struct, kv map[string]psl.Value) (int,
 			n += 4
 		case pdl.TypeIPv6:
 			n += 16
-		case pdl.TypeByteN:
-			n += f.ByteSize
-		case pdl.TypeBytes:
-			// Variable length inside single struct is not expanded for now
 		case pdl.TypeStructRef:
 			subSt := b.Registry.GetStruct(f.StructName)
 			if subSt == nil {
@@ -366,13 +358,6 @@ func (b *Builder) buildLayer(proto *pdl.Protocol, kv map[string]psl.Value, total
 				ip = make([]byte, 16)
 			}
 			buf = append(buf, ip...)
-		case pdl.TypeByteN:
-			n := toU64(v)
-			for i := 0; i < f.ByteSize; i++ {
-				buf = append(buf, byte(n>>(8*(f.ByteSize-1-i))))
-			}
-		case pdl.TypeBytes:
-			// Variable length: usually payload, not appended to header here
 		case pdl.TypeStructRef:
 			st := b.Registry.GetStruct(f.StructName)
 			if st == nil {
@@ -549,13 +534,6 @@ func (b *Builder) serializeFieldValue(ft pdl.FieldType, byteSize int, v interfac
 			ip = make([]byte, 16)
 		}
 		return ip, nil
-	case pdl.TypeByteN:
-		n := toU64(v)
-		out := make([]byte, byteSize)
-		for i := 0; i < byteSize; i++ {
-			out[i] = byte(n >> (8 * (byteSize - 1 - i)))
-		}
-		return out, nil
 	default:
 		return nil, nil
 	}
@@ -712,8 +690,6 @@ func (b *Builder) fieldOffset(proto *pdl.Protocol, name string, kv map[string]ps
 			off += 4
 		case pdl.TypeIPv6:
 			off += 16
-		case pdl.TypeByteN:
-			off += f.ByteSize
 		case pdl.TypeStructArray:
 			st := b.Registry.GetStruct(f.StructName)
 			if st == nil {

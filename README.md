@@ -11,8 +11,8 @@ It is designed for rapid packet construction, flow control (loops, intervals, co
 ### 1.1 Protocol Definition Language (PDL)
 PDL allows you to define custom protocol headers similar to Go structs. The tool automatically handles field offsets, checksum calculations, and default value population.
 
-- **Built-in Types**: `u8`, `u16`, `u32`, `u64`, `mac`, `ipv4`, `ipv6`, `byte[N]`, `bytes`.
-- **Dynamic & Fixed Arrays**: Supports `[]type` (dynamic length), `[N]type` (fixed length, padded automatically), and `[field]type` (length is derived from a preceding field, which is **auto-filled during packet building**).
+- **Built-in Types**: `u8`, `u16`, `u32`, `u64`, `mac`, `ipv4`, `ipv6`.
+- **Dynamic & Fixed Arrays**: Supports struct arrays such as `[]StructName` (dynamic length), `[N]StructName` (fixed length, padded automatically), and `[field]StructName` (length is derived from a preceding field, which is **auto-filled during packet building**).
 - **Auto-Calculations**: Use built-in functions like `$len` (calculate total length), `$payload_len` (calculate payload length), and `$cksum` (automatically calculate IPv4, TCP, UDP, ICMP checksums).
 - **Nested Structures**: Define inner structs and reuse them within multiple protocol definitions.
 

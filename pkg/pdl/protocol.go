@@ -13,8 +13,6 @@ const (
 	TypeMAC
 	TypeIPv4
 	TypeIPv6
-	TypeByteN        // byte[N]
-	TypeBytes        // Variable length
 	TypeStructArray  // []StructName, repeated structure array
 	TypeStructRef    // StructName, nested single structure
 )
@@ -44,7 +42,7 @@ const (
 type Field struct {
 	Name          string
 	Type          FieldType
-	ByteSize      int    // N used for byte[N]
+	ByteSize      int    // reserved for potential custom-sized fields (currently unused)
 	StructName    string // Referenced struct name when Type is TypeStructRef/TypeStructArray
 	Array         ArrayKind
 	ArrayLen      int    // N when Array == ArrayFixed
