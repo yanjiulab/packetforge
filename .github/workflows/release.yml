@@ -85,7 +85,7 @@ jobs:
           fi
           mkdir -p "${OUTDIR}"
 
-          go build -trimpath -ldflags "${LDFLAGS}" -o "${OUTDIR}/packetforge${EXT}" ./cmd/packetforge
+          go build -trimpath -ldflags "${LDFLAGS}" -o "${OUTDIR}/pf${EXT}" ./cmd/pf
 
           pushd dist >/dev/null
           BASENAME="$(basename "${OUTDIR}")"
