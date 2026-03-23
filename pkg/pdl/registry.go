@@ -41,10 +41,15 @@ func (r *Registry) LoadPDLFile(path string) error {
 	if err != nil {
 		return err
 	}
-	parser := NewParser(string(data))
+	return r.LoadPDLContent(path, string(data))
+}
+
+// LoadPDLContent parses PDL source and registers all protocols and structs.
+func (r *Registry) LoadPDLContent(sourceName, content string) error {
+	parser := NewParser(content)
 	protos, structs, err := parser.ParseFile()
 	if err != nil {
-		return fmt.Errorf("parse %s: %w", path, err)
+		return fmt.Errorf("parse %s: %w", sourceName, err)
 	}
 	for _, st := range structs {
 		r.RegisterStruct(st)

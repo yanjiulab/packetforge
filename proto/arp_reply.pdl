@@ -1,9 +1,10 @@
-protocol arp {
+// ARP 响应
+protocol arp_reply {
 	htype    u16 = 1
 	ptype    u16 = 0x0800
 	hlen     u8  = 6
 	plen     u8  = 4
-	oper     u16
+	oper     u16 = 2
 	sha      mac
 	spa      ipv4
 	tha      mac

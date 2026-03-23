@@ -54,15 +54,22 @@ go build -o pf ./cmd/pf
 
 ### Command-Line Arguments
 ```bash
-Usage: pf -stream <script.psl> [-proto dir] [-iface interface] [-dry-run]
-  -stream string
-        Packet stream language file (required)
-  -proto string
-        Protocol definition directory (.pdl files) (default "proto")
-  -iface string
-        Network interface to send packets (e.g. eth0, lo) (default "lo")
-  -dry-run
-        Parse and build packets only, do not actually send them
+Usage:
+  pf [flags]
+
+Flags:
+      --builtin-proto    Load built-in common protocols first (eth/vlan/arp/arp_request/arp_reply/ip/ipv6/icmp/icmp6/ndp_ns/ndp_na/udp/tcp) (default true)
+      --dry-run          Parse and build packets only, do not actually send
+  -h, --help             help for pf
+      --iface string     Network interface to send packets (e.g. eth0, lo) (default "lo")
+      --proto string     Protocol definition directory (.pdl files), optional (default "proto")
+      --stream string    Packet stream language file (required)
+  -v, --version          version for pf
+```
+
+Show builtin protocol list:
+```bash
+pf builtin
 ```
 
 ### Quick Example

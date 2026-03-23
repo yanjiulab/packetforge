@@ -1,0 +1,23 @@
+const OUTER_SRC_MAC = 02:00:00:00:10:01
+const OUTER_DST_MAC = 02:00:00:00:10:02
+const OUTER_SRC_IP  = 10.10.10.1
+const OUTER_DST_IP  = 10.10.10.2
+
+const INNER_SRC_MAC = 02:00:00:00:20:01
+const INNER_DST_MAC = 02:00:00:00:20:02
+const INNER_SRC_IP  = 192.168.100.1
+const INNER_DST_IP  = 192.168.100.2
+
+[
+  // Outer tunnel headers
+  eth(src=OUTER_SRC_MAC, dst=OUTER_DST_MAC, type=0x0800)
+  ip(src=OUTER_SRC_IP, dst=OUTER_DST_IP, protocol=17)
+  udp(sport=55000, dport=4789)
+  vxlan(vni_b1=0x00, vni_b2=0x00, vni_b3=0x64)
+
+  // Inner packet carried by VXLAN (a UDP packet)
+  eth(src=INNER_SRC_MAC, dst=INNER_DST_MAC, type=0x0800)
+  ip(src=INNER_SRC_IP, dst=INNER_DST_IP, protocol=17)
+  udp(sport=12345, dport=9000)
+  `hello-from-inner-udp`
+]

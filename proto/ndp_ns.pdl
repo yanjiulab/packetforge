@@ -1,0 +1,11 @@
+// ICMPv6 Neighbor Solicitation（带 Source Link-Layer Address 选项）
+protocol ndp_ns {
+	type       u8   = 135
+	code       u8   = 0
+	checksum   u16  = $cksum
+	reserved   u32  = 0
+	target     ipv6
+	opt_type   u8   = 1
+	opt_len    u8   = 1
+	opt_slla   mac
+}

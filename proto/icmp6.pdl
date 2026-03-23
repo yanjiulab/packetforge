@@ -1,0 +1,7 @@
+// ICMPv6 基础头（前 8 字节）
+protocol icmp6 {
+	type     u8  = 128
+	code     u8  = 0
+	checksum u16 = $cksum
+	data32   u32 = 0
+}

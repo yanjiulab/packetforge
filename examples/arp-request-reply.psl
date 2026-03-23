@@ -1,0 +1,14 @@
+const A_MAC = 02:00:00:00:00:0a
+const A_IP  = 192.168.10.10
+const B_MAC = 02:00:00:00:00:0b
+const B_IP  = 192.168.10.20
+
+[
+  eth(src=A_MAC, dst=ff:ff:ff:ff:ff:ff, type=0x0806)
+  arp_request(sha=A_MAC, spa=A_IP, tha=00:00:00:00:00:00, tpa=B_IP)
+]
+
+[
+  eth(src=B_MAC, dst=A_MAC, type=0x0806)
+  arp_reply(sha=B_MAC, spa=B_IP, tha=A_MAC, tpa=A_IP)
+]

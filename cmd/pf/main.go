@@ -2,12 +2,13 @@
 package main
 
 import (
-	"flag"
-	"strings"
 	"fmt"
 	"os"
-	"path/filepath"
 	"runtime"
+	"strings"
+
+	"github.com/spf13/cobra"
+	"github.com/spf13/viper"
 	"github.com/yanjiulab/packetforge/pkg/engine"
 	"github.com/yanjiulab/packetforge/pkg/packet"
 	"github.com/yanjiulab/packetforge/pkg/pdl"
@@ -92,68 +93,112 @@ func VersionString() string {
 	)
 }
 
-
 func main() {
-	pdlDir := flag.String("proto", "proto", "Protocol definition directory (.pdl files)")
-	pslFile := flag.String("stream", "", "Packet stream language file (required)")
-	iface := flag.String("iface", "lo", "Network interface to send packets (e.g. eth0, lo)")
-	dryRun := flag.Bool("dry-run", false, "Parse and build packets only, do not actually send")
-	printVersion := flag.Bool("version", false, "print version and exit")
-	flag.Parse()
-
-	if *printVersion {
-		fmt.Println(VersionString())
-		return
-	}
-
-	if *pslFile == "" {
-		fmt.Fprintf(os.Stderr, "Usage: %s -stream <script.psl> [-proto dir] [-iface interface] [-dry-run]\n", filepath.Base(os.Args[0]))
-		flag.Usage()
+	rootCmd := newRootCmd()
+	if err := rootCmd.Execute(); err != nil {
+		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
+}
 
+func newRootCmd() *cobra.Command {
+	rootCmd := &cobra.Command{
+		Use:   "pf",
+		Short: "PacketForge protocol registry and packet sender",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			pslFile := viper.GetString("stream")
+			if pslFile == "" {
+				return fmt.Errorf("required flag \"stream\" not set")
+			}
+
+			return run(pslFile, viper.GetString("proto"), viper.GetString("iface"), viper.GetBool("dry-run"), viper.GetBool("builtin-proto"))
+		},
+	}
+
+	rootCmd.Version = VersionString()
+	rootCmd.SetVersionTemplate("{{.Version}}\n")
+
+	flags := rootCmd.Flags()
+	flags.StringP("proto", "p", "proto", "Protocol definition directory (.pdl files), optional")
+	flags.StringP("stream", "s", "", "Packet stream language file (required)")
+	flags.StringP("iface", "i", "lo", "Network interface to send packets (e.g. eth0, lo)")
+	flags.BoolP("dry-run", "d", false, "Parse and build packets only, do not actually send")
+	flags.BoolP("builtin-proto", "b", true, "Load built-in common protocols first (eth/vlan/arp/arp_request/arp_reply/ip/ipv6/icmp/icmp6/ndp_ns/ndp_na/udp/tcp)")
+
+	_ = viper.BindPFlag("proto", flags.Lookup("proto"))
+	_ = viper.BindPFlag("stream", flags.Lookup("stream"))
+	_ = viper.BindPFlag("iface", flags.Lookup("iface"))
+	_ = viper.BindPFlag("dry-run", flags.Lookup("dry-run"))
+	_ = viper.BindPFlag("builtin-proto", flags.Lookup("builtin-proto"))
+	viper.SetEnvPrefix("PF")
+	viper.AutomaticEnv()
+	rootCmd.AddCommand(newBuiltinCmd())
+
+	return rootCmd
+}
+
+func newBuiltinCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "builtin",
+		Short: "Show builtin protocol list",
+		Run: func(cmd *cobra.Command, args []string) {
+			for _, name := range pdl.BuiltinCommonProtocolNames() {
+				fmt.Println(name)
+			}
+		},
+	}
+}
+
+func run(pslFile, pdlDir, iface string, dryRun bool, builtinProto bool) error {
 	// 1. Load PDL protocols
 	reg := pdl.NewRegistry()
-	if err := reg.LoadPDLDir(*pdlDir); err != nil {
-		fmt.Fprintf(os.Stderr, "Load PDL: %v\n", err)
-		os.Exit(1)
+	if builtinProto {
+		if err := reg.LoadBuiltinCommonProtocols(); err != nil {
+			return fmt.Errorf("load builtin protocols: %w", err)
+		}
+	}
+	if pdlDir != "" {
+		if _, err := os.Stat(pdlDir); err == nil {
+			if err := reg.LoadPDLDir(pdlDir); err != nil {
+				return fmt.Errorf("load PDL dir: %w", err)
+			}
+		} else if !os.IsNotExist(err) || pdlDir != "proto" {
+			return fmt.Errorf("read proto dir %q: %w", pdlDir, err)
+		}
 	}
 
 	// 2. Parse PSL script
-	pslData, err := os.ReadFile(*pslFile)
+	pslData, err := os.ReadFile(pslFile)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Read PSL: %v\n", err)
-		os.Exit(1)
+		return fmt.Errorf("read PSL: %w", err)
 	}
 	parser := psl.NewParser(string(pslData))
 	script, err := parser.ParseScript()
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Parse PSL: %v\n", err)
-		os.Exit(1)
+		return fmt.Errorf("parse PSL: %w", err)
 	}
 
 	builder := packet.NewBuilder(reg)
 
 	sendFn := func(data []byte) error {
-		if *dryRun {
+		if dryRun {
 			fmt.Printf("[dry-run] Send %d bytes:\n%s\n", len(data), FormatTCPDump(data, 0))
 			return nil
 		}
 		return nil
 	}
 
-	if !*dryRun {
-		sender, err := packet.NewSender(*iface)
+	if !dryRun {
+		sender, err := packet.NewSender(iface)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "Create sender: %v\n", err)
-			os.Exit(1)
+			return fmt.Errorf("create sender: %w", err)
 		}
 		defer sender.Close()
 		sendFn = sender.Send
 	}
 
 	if err := engine.Run(script, builder, sendFn); err != nil {
-		fmt.Fprintf(os.Stderr, "Run: %v\n", err)
-		os.Exit(1)
+		return fmt.Errorf("run: %w", err)
 	}
+	return nil
 }

@@ -1,0 +1,11 @@
+// ICMPv6 Neighbor Advertisement（带 Target Link-Layer Address 选项）
+protocol ndp_na {
+	type       u8   = 136
+	code       u8   = 0
+	checksum   u16  = $cksum
+	flags      u32  = 0x60000000
+	target     ipv6
+	opt_type   u8   = 2
+	opt_len    u8   = 1
+	opt_tlla   mac
+}

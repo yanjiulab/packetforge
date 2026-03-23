@@ -1,9 +1,10 @@
-protocol arp {
+// ARP 请求
+protocol arp_request {
 	htype    u16 = 1
 	ptype    u16 = 0x0800
 	hlen     u8  = 6
 	plen     u8  = 4
-	oper     u16
+	oper     u16 = 1
 	sha      mac
 	spa      ipv4
 	tha      mac

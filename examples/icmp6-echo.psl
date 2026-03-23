@@ -1,0 +1,16 @@
+const A_MAC = 02:00:00:00:00:11
+const B_MAC = 02:00:00:00:00:22
+const A_IP6 = fe80::1
+const B_IP6 = fe80::2
+
+[
+  eth(src=A_MAC, dst=B_MAC, type=0x86dd)
+  ipv6(src=A_IP6, dst=B_IP6, next_header=58, hop_limit=64)
+  icmp6(type=128, code=0, data32=0x12340001)
+]
+
+[
+  eth(src=B_MAC, dst=A_MAC, type=0x86dd)
+  ipv6(src=B_IP6, dst=A_IP6, next_header=58, hop_limit=64)
+  icmp6(type=129, code=0, data32=0x12340001)
+]

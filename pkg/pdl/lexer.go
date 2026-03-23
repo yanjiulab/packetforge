@@ -107,6 +107,12 @@ func (l *Lexer) Lex() Token {
 	}
 
 	c := l.peek()
+	// MAC literals can start with numeric or alphabetic hex chars (e.g. ff:ff:...).
+	if isHexChar(c) {
+		if l.pos+2 < len(l.src) && isHexChar(l.src[l.pos+1]) && l.src[l.pos+2] == ':' {
+			return l.lexMAC(line, col)
+		}
+	}
 	switch c {
 	case '{':
 		l.next()
@@ -134,17 +140,15 @@ func (l *Lexer) Lex() Token {
 		return l.lexIdent(line, col)
 	}
 	if c >= '0' && c <= '9' {
-		// Might be a MAC literal 00:00:00:00:00:00
-		if l.pos+2 <= len(l.src) && l.src[l.pos+1] >= '0' && l.src[l.pos+1] <= '9' {
-			if l.pos+3 <= len(l.src) && l.src[l.pos+2] == ':' {
-				return l.lexMAC(line, col)
-			}
-		}
 		return l.lexNumber(line, col)
 	}
 
 	l.next()
 	return Token{Kind: TokenIdent, Raw: string(c), Line: line, Col: col}
+}
+
+func isHexChar(c byte) bool {
+	return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F')
 }
 
 func (l *Lexer) lexString(line, col int) Token {

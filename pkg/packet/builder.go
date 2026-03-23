@@ -58,14 +58,15 @@ func (b *Builder) Build(pkt *psl.Packet, opts *BuildOptions) ([]byte, error) {
 	}
 	totalLen := totalHeader + len(payload)
 
-	// Second pass: serialize layer by layer, fill in defaults and checksums
-	out := make([]byte, 0, totalLen)
-	offset := 0
-	for i, layer := range pkt.Layers {
+	// Second pass: build from inner to outer, so each layer sees finalized inner payload length.
+	segments := make([][]byte, len(pkt.Layers))
+	innerBuiltLen := len(payload)
+	for i := len(pkt.Layers) - 1; i >= 0; i-- {
+		layer := pkt.Layers[i]
 		proto := b.Registry.Get(layer.Proto)
 		layerLen := headerSizes[i]
-		fromHere := totalLen - offset
-		payloadFromHere := fromHere - layerLen
+		fromHere := layerLen + innerBuiltLen
+		payloadFromHere := innerBuiltLen
 		nextProto := ""
 		if i+1 < len(pkt.Layers) {
 			nextProto = pkt.Layers[i+1].Proto
@@ -91,8 +92,13 @@ func (b *Builder) Build(pkt *psl.Packet, opts *BuildOptions) ([]byte, error) {
 		if err != nil {
 			return nil, err
 		}
-		out = append(out, seg...)
-		offset += layerLen
+		segments[i] = seg
+		innerBuiltLen += layerLen
+	}
+
+	out := make([]byte, 0, totalLen)
+	for i := range segments {
+		out = append(out, segments[i]...)
 	}
 	out = append(out, payload...)
 
@@ -122,6 +128,10 @@ func ipProtocolNumber(proto string) uint64 {
 		return 17
 	case "icmp":
 		return 1
+	case "icmp6":
+		return 58
+	case "ndp_ns", "ndp_na":
+		return 58
 	default:
 		return 0
 	}
@@ -610,7 +620,9 @@ func (b *Builder) fillChecksums(pkt *psl.Packet, raw []byte, headerSizes []int, 
 		layerStarts[i+1] = layerStarts[i] + headerSizes[i]
 	}
 
-	for i, layer := range pkt.Layers {
+	// Fill from inner to outer, so encapsulating checksums observe finalized inner checksums.
+	for i := len(pkt.Layers) - 1; i >= 0; i-- {
+		layer := pkt.Layers[i]
 		proto := b.Registry.Get(layer.Proto)
 		if proto == nil {
 			continue
@@ -660,6 +672,13 @@ func (b *Builder) fillChecksums(pkt *psl.Packet, raw []byte, headerSizes []int, 
 				}
 			case "icmp":
 				cksum = icmpChecksum(raw[offset:])
+			case "icmp6", "ndp_ns", "ndp_na":
+				if i > 0 && strings.ToLower(pkt.Layers[i-1].Proto) == "ipv6" {
+					prevStart := layerStarts[i-1]
+					cksum = icmpv6Checksum(raw, prevStart, offset, hlen)
+				} else {
+					cksum = icmpChecksum(raw[offset:])
+				}
 			default:
 				cksum = genericChecksum(raw[offset:])
 			}
@@ -773,6 +792,19 @@ func udpChecksumIPv6(full []byte, ipv6Start, udpStart, udpLen int) uint16 {
 	binary.BigEndian.PutUint32(pseudo[32:36], uint32(upperLen))
 	pseudo[39] = 17 // UDP
 	seg := append(pseudo, full[udpStart:]...)
+	return onesComplementSum(seg)
+}
+
+func icmpv6Checksum(full []byte, ipv6Start, icmpStart, icmpLen int) uint16 {
+	upperLen := len(full) - icmpStart
+	pseudo := make([]byte, 40)
+	if ipv6Start+40 <= len(full) {
+		copy(pseudo[0:16], full[ipv6Start+8:ipv6Start+24])
+		copy(pseudo[16:32], full[ipv6Start+24:ipv6Start+40])
+	}
+	binary.BigEndian.PutUint32(pseudo[32:36], uint32(upperLen))
+	pseudo[39] = 58 // ICMPv6
+	seg := append(pseudo, full[icmpStart:]...)
 	return onesComplementSum(seg)
 }
 

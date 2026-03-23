@@ -1,0 +1,11 @@
+// VXLAN header (8 bytes)
+protocol vxlan {
+	flags     u8  = 0x08
+	rsvd1_1   u8  = 0
+	rsvd1_2   u8  = 0
+	rsvd1_3   u8  = 0
+	vni_b1    u8
+	vni_b2    u8
+	vni_b3    u8
+	rsvd2     u8  = 0
+}

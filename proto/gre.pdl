@@ -1,0 +1,6 @@
+// GRE 基础头（RFC 2784，4 字节）
+// 仅描述不带可选字段（checksum/key/sequence）的基础格式。
+protocol gre {
+	flags_ver u16 = 0x0000
+	proto     u16 = 0x0800
+}

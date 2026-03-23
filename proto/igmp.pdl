@@ -1,0 +1,7 @@
+// IGMPv2 协议头（8 字节）
+protocol igmp {
+	type      u8  = 0x11
+	max_resp  u8  = 100
+	checksum  u16 = $cksum
+	group     ipv4
+}
