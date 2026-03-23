@@ -15,10 +15,10 @@ COMMIT="$(git rev-parse HEAD 2>/dev/null || echo unknown)"
 DATE="$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
 
 LDFLAGS="-s -w \
-  -X github.com/yanjiulab/packetforge/internal/version.Version=${VERSION} \
-  -X github.com/yanjiulab/packetforge/internal/version.Commit=${COMMIT} \
-  -X github.com/yanjiulab/packetforge/internal/version.Date=${DATE} \
-  -X github.com/yanjiulab/packetforge/internal/version.BuiltBy=local"
+  -X main.Version=${VERSION} \
+  -X main.Commit=${COMMIT} \
+  -X main.Date=${DATE} \
+  -X main.BuiltBy=local"
 
 echo "Building packetforge locally with:"
 echo "  VERSION=${VERSION}"
@@ -32,5 +32,5 @@ export CGO_ENABLED="${CGO_ENABLED:-0}"
 go build -trimpath -ldflags "${LDFLAGS}" -o pf ./cmd/pf
 
 echo "Done."
-echo "  ./pf version"
+echo "  ./pf -v"
 
