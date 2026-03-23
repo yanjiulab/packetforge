@@ -1,111 +1,131 @@
 # PacketForge
 
-PacketForge is a highly flexible, fully programmable network packet crafting and injection tool driven by two domain-specific languages (DSLs): **PDL (Protocol Definition Language)** and **PSL (Packet Stream Language)**. 
+PacketForge is a programmable packet crafting and injection tool based on two DSLs:
 
-It is designed for rapid packet construction, flow control (loops, intervals, concurrency), and dynamic protocol definition. It is particularly well-suited for network testing, protocol simulation, and low-level packet forging.
+- `PDL` (Protocol Definition Language): define protocol headers and defaults.
+- `PSL` (Packet Stream Language): describe packet streams and flow control.
 
----
+## Installation
 
-## 1. Core Features
-
-### 1.1 Protocol Definition Language (PDL)
-PDL allows you to define custom protocol headers similar to Go structs. The tool automatically handles field offsets, checksum calculations, and default value population.
-
-- **Built-in Types**: `u8`, `u16`, `u32`, `u64`, `mac`, `ipv4`, `ipv6`.
-- **Dynamic & Fixed Arrays**: Supports struct arrays such as `[]StructName` (dynamic length), `[N]StructName` (fixed length, padded automatically), and `[field]StructName` (length is derived from a preceding field, which is **auto-filled during packet building**).
-- **Auto-Calculations**: Use built-in functions like `$len` (calculate total length), `$payload_len` (calculate payload length), and `$cksum` (automatically calculate IPv4, TCP, UDP, ICMP checksums).
-- **Nested Structures**: Define inner structs and reuse them within multiple protocol definitions.
-
-### 1.2 Packet Stream Language (PSL)
-PSL is a concise, unambiguous DSL designed for constructing packet streams, defining their contents, and controlling their flow.
-
-- **Bracket System**: 
-  - `()` configures protocol layer fields (e.g. `tcp(sport=1234, dport=80)`).
-  - `[]` wraps a single packet (can be omitted for single-line packets).
-  - `{}` groups multiple packets into a block for collective flow control.
-- **Payload Formatting**: Supported directly via backticks (`` `...` ``) with prefixes for strings (default), hex (`x`), binary (`b`), and base64 (`64`).
-- **Flow Control**:
-  - `@repeat N` or `@repeat forever`: Loops the preceding packet or block.
-  - `@interval [time]`: Pauses between transmissions (e.g., `100ms`, `1s`).
-- **Variables & Macros**: Define constants at the top level (e.g., `const BRD = FF:FF:FF:FF:FF:FF`) to simplify address typing.
-- **Dynamic Field Iteration**: Use `$inc(step)` or `$seq(start, step)` in loops to auto-increment fields (like IP IDs) natively per repeat.
-
-### 1.3 Asynchronous Execution (`async` blocks)
-You can prefix a block with `async` to run it in a background goroutine without blocking the main stream execution. This is extremely useful for background keep-alives or heartbeat packets.
-*Note: Once the main execution thread finishes its sequence, the application will exit and tear down any running `async` blocks immediately.*
-
----
-
-## 2. Usage
-
-### Installation
-
-Download `packetforge` from `go install`:
 ```bash
 go install github.com/yanjiulab/packetforge/cmd/pf@latest
 ```
 
-Or clone and build the project:
+or:
+
 ```bash
 git clone https://github.com/yanjiulab/packetforge.git
 cd packetforge
 go build -o pf ./cmd/pf
 ```
 
-### Command-Line Arguments
-```bash
-Usage:
-  pf [flags]
+## Command Capability Matrix
 
-Flags:
-      --builtin-proto    Load built-in common protocols first (eth/vlan/arp/arp_request/arp_reply/ip/ipv6/icmp/icmp6/ndp_ns/ndp_na/udp/tcp) (default true)
-      --dry-run          Parse and build packets only, do not actually send
-  -h, --help             help for pf
-      --iface string     Network interface to send packets (e.g. eth0, lo) (default "lo")
-      --proto string     Protocol definition directory (.pdl files), optional (default "proto")
-      --stream string    Packet stream language file (required)
-  -v, --version          version for pf
+| Command | Primary goal | Reads `@fuzz` | Sends real packets | Typical output |
+|---|---|---|---|---|
+| `pf` | normal parse/build/send | No (errors if present) | Yes (`--dry-run` disables) | send result or dry-run hexdump |
+| `pf fuzz` | run fuzz rules from PSL | Yes | Yes (`--dry-run` disables) | per-case values + send/dry-run output |
+| `pf explain` | visualize packet layout | No | No | layer offsets/length/hex (text or JSON) |
+| `pf builtin` | list built-in protocols | N/A | No | protocol name list |
+
+## Core CLI Usage
+
+### `pf` (normal mode)
+
+```bash
+pf -s examples/test.psl -i eth0
+pf -s examples/test.psl -d
 ```
 
-Show builtin protocol list:
+Common flags:
+
+- `-s, --stream` PSL file (required)
+- `-p, --proto` PDL directory (default `proto`)
+- `-i, --iface` interface (default `lo`)
+- `-d, --dry-run` parse/build only
+- `-b, --builtin-proto` load builtin protocols
+- `--seed` random seed for `$rand*` builtins
+
+### `pf fuzz`
+
 ```bash
-pf builtin
+pf fuzz -s examples/fuzz-basic.psl -i eth0
+pf fuzz -s examples/fuzz-basic.psl -d --seed 42 --max-cases 20
 ```
 
-Visualize packet layout and per-layer bytes:
+Notes:
+
+- `@fuzz` rules are parsed only in `pf fuzz`.
+- In normal `pf` mode, scripts containing `@fuzz` return an error.
+
+Supported rules:
+
+- `@fuzz layer.field boundary`
+- `@fuzz layer.field pick(v1,v2,...)`
+- `@fuzz layer.field range(min,max[,step])`
+- `@fuzz count N`
+
+### `pf explain`
+
 ```bash
 pf explain -s examples/basic.psl
 pf explain -s examples/random-builtins.psl --seed 42 --format json
 ```
 
-Run fuzz mode (only `pf fuzz` parses `@fuzz` rules):
+Output contains, per packet:
+
+- layer name
+- offset
+- byte length
+- layer hex bytes
+
+### `pf builtin`
+
 ```bash
-pf fuzz -s examples/fuzz-basic.psl -d --seed 42
+pf builtin
 ```
 
-### Quick Example
-**1. Protocol Definition (`proto/myproto.pdl`)**
-```pdl
-protocol myproto {
-    magic u32 = 0xdeadbeef
-    len u8 = $payload_len
-    reserved u16 = 0
-}
-```
+## DSL Highlights
 
-**2. Packet Stream Script (`examples/test.psl`)**
+### PDL
+
+- Built-in types: `u8`, `u16`, `u32`, `u64`, `mac`, `ipv4`, `ipv6`
+- Auto values: `$len`, `$payload_len`, `$cksum`
+- Struct arrays: `[]Type`, `[N]Type`, `[field]Type`
+- Nested structures via `struct` + field references
+
+### PSL
+
+- Layer fields: `proto(field=value,...)`
+- Packet wrappers: `[...]` (single-line packet may omit brackets)
+- Payload: backticks with optional prefixes:
+  - string (default): `` `hello` ``
+  - hex: `` `x 48656c6c6f` ``
+  - binary: `` `b 01000001` ``
+  - base64: `` `64 SGVsbG8=` ``
+- Flow control:
+  - `@repeat N` / `@repeat forever`
+  - `@interval 100ms|1s|...`
+  - `async { ... }`
+- Constants: `const NAME = ...`
+- Builtins:
+  - sequence: `$inc(step)`, `$seq(start[,step])`
+  - random: `$rand()`, `$randn(max)`, `$randrange(min,max)`, `$randport()`, `$randmac()`, `$randipv4()`, `$randhex(n)`
+
+## Quick Start Example
+
+`examples/test.psl`:
+
 ```psl
 const SOURCE = 192.168.1.1
 const TARGET = 192.168.1.100
 
-// Background ping (runs asynchronously)
 async {
   [eth() ip(src=SOURCE, dst=TARGET) icmp() `ping`]
   @repeat forever
   @interval 1s
 }
 
-// Mainline TCP stream
 [
   eth()
   ip(src=SOURCE, dst=TARGET, id=$seq(1, 1))
@@ -116,11 +136,10 @@ async {
 @interval 100ms
 ```
 
-**3. Execution**
+Run:
+
 ```bash
-sudo ./pf -stream examples/test.psl -iface eth0
+pf -s examples/test.psl -i eth0
 ```
 
----
-
-*For detailed syntax rules and advanced protocol features (like array population or nested structs), please check the `.pdl` definitions in `proto/` and the examples in `examples/`.*
+More examples are in `examples/`, and protocol definitions are in `proto/`.
