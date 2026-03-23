@@ -21,6 +21,7 @@ The following examples can be used for parsing/building/sending tests (it is rec
 | `ipv6.psl` | IPv6 header + payload (demonstrates parsing IPv6 PSL literals) |
 | `ipv6-tcp.psl` | IPv6 + TCP, checksum computed using the IPv6 pseudo-header |
 | `inc-seq.psl` | `$seq(1,1)` with `@repeat 5`: `ip.id` increments per repeat (1, 2, 3, 4, 5) |
+| `random-builtins.psl` | Random built-ins: `$rand*` functions for MAC/IP/ports/number ranges |
 | `rip-repeat.psl` | PDL repeated structure: `rip(entries=[ { addr=..., metric=... }, ... ])` |
 | `pim-hello.psl` | PIM Hello example (using `[]type` dynamic array) |
 | `pim-join-prune.psl`| PIM Join/Prune example (with `[field]type` length field auto-filled) |
@@ -32,6 +33,6 @@ The following examples can be used for parsing/building/sending tests (it is rec
 | `test.psl` | Example in README.md |
 
 ### Key Features Highlighted
-- **$inc / $seq**: Written in field values as `$inc(step)` or `$seq(start[, step])`. During `@repeat`, it is evaluated based on the **repeat index of the current packet statement**; the scope is limited to that statement, and multiple packets within a block are independent.
+- **$inc / $seq / $rand***: Built-ins in field values. Supported random forms: `$rand()`, `$randn(max)`, `$randrange(min,max)`, `$randport()`, `$randmac()`, `$randipv4()`, `$randhex(n)`. Use CLI `--seed` for reproducible results.
 - **Constants**: Use `const Identifier = Value` at the top level of PSL for macro replacement, making it easy to reuse complex values (like MAC addresses).
 - **PDL Arrays**: Supports three array types: `[]type` (dynamic length), `[N]type` (fixed length, padded with default values if insufficient), and `[field]type` (length is associated with a preceding field, **the Builder automatically auto-fills the actual number of elements during packet creation**). In PSL, they are consistently populated using `field=[ { k=v, ... }, { ... } ]`.

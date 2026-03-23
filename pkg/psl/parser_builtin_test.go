@@ -36,3 +36,25 @@ func TestParseBuiltinValue(t *testing.T) {
 		t.Fatalf("expected BuiltinArgs [1,1], got %v", idVal.BuiltinArgs)
 	}
 }
+
+func TestParseRandomBuiltinValue(t *testing.T) {
+	src := "[ ip(src=$randipv4(), dst=192.168.1.2, id=$randrange(1, 10)) ]"
+	p := NewParser(src)
+	script, err := p.ParseScript()
+	if err != nil {
+		t.Fatalf("ParseScript: %v", err)
+	}
+	ps, ok := script.Stmts[0].(*PacketStmt)
+	if !ok {
+		t.Fatalf("expected PacketStmt, got %T", script.Stmts[0])
+	}
+	ipLayer := ps.Packet.Layers[0]
+	srcVal := ipLayer.KV["src"]
+	if srcVal.Kind != ValBuiltin || srcVal.BuiltinName != "$randipv4" {
+		t.Fatalf("expected src builtin $randipv4, got kind=%v name=%q", srcVal.Kind, srcVal.BuiltinName)
+	}
+	idVal := ipLayer.KV["id"]
+	if idVal.Kind != ValBuiltin || idVal.BuiltinName != "$randrange" || len(idVal.BuiltinArgs) != 2 {
+		t.Fatalf("expected id builtin $randrange(1,10), got %+v", idVal)
+	}
+}

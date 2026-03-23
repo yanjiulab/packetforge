@@ -1,0 +1,7 @@
+[
+  eth(src=$randmac(), dst=ff:ff:ff:ff:ff:ff, type=0x0800)
+  ip(src=$randipv4(), dst=192.168.1.1, id=$randrange(1, 65535), ttl=$randn(255))
+  udp(sport=$randport(), dport=9000)
+  `hello-random`
+]
+@repeat 3

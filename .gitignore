@@ -1,1 +1,16 @@
-pf
+# Build artifacts
+/pf
+/pf.exe
+
+# Go binaries and test artifacts
+*.test
+*.out
+coverage.out
+coverage.txt
+cover.out
+
+# Common OS/editor files
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/

@@ -8,6 +8,6 @@ PROTO_DIR="$ROOT_DIR/proto"
 for psl in "$EXAMPLES_DIR"/*.psl; do
   [ -e "$psl" ] || continue  # 没有匹配文件时跳过
   echo "===== dry-run: $(basename "$psl") ====="
-  ./pf -stream "$psl" -proto "$PROTO_DIR" -dry-run
+  ./pf -s "$psl" -p "$PROTO_DIR" -d
   echo
 done

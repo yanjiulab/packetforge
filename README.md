@@ -72,6 +72,12 @@ Show builtin protocol list:
 pf builtin
 ```
 
+Visualize packet layout and per-layer bytes:
+```bash
+pf explain -s examples/basic.psl
+pf explain -s examples/random-builtins.psl --seed 42 --format json
+```
+
 ### Quick Example
 **1. Protocol Definition (`proto/myproto.pdl`)**
 ```pdl

@@ -2,6 +2,8 @@
 package main
 
 import (
+	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"os"
 	"runtime"
@@ -124,15 +126,18 @@ func newRootCmd() *cobra.Command {
 	flags.StringP("iface", "i", "lo", "Network interface to send packets (e.g. eth0, lo)")
 	flags.BoolP("dry-run", "d", false, "Parse and build packets only, do not actually send")
 	flags.BoolP("builtin-proto", "b", true, "Load built-in common protocols first (eth/vlan/arp/arp_request/arp_reply/ip/ipv6/icmp/icmp6/ndp_ns/ndp_na/udp/tcp)")
+	flags.Int64("seed", 0, "Random seed for built-in random functions (0 means auto)")
 
 	_ = viper.BindPFlag("proto", flags.Lookup("proto"))
 	_ = viper.BindPFlag("stream", flags.Lookup("stream"))
 	_ = viper.BindPFlag("iface", flags.Lookup("iface"))
 	_ = viper.BindPFlag("dry-run", flags.Lookup("dry-run"))
 	_ = viper.BindPFlag("builtin-proto", flags.Lookup("builtin-proto"))
+	_ = viper.BindPFlag("seed", flags.Lookup("seed"))
 	viper.SetEnvPrefix("PF")
 	viper.AutomaticEnv()
 	rootCmd.AddCommand(newBuiltinCmd())
+	rootCmd.AddCommand(newExplainCmd())
 
 	return rootCmd
 }
@@ -149,22 +154,139 @@ func newBuiltinCmd() *cobra.Command {
 	}
 }
 
-func run(pslFile, pdlDir, iface string, dryRun bool, builtinProto bool) error {
-	// 1. Load PDL protocols
+type explainLayer struct {
+	Proto  string `json:"proto"`
+	Offset int    `json:"offset"`
+	Length int    `json:"length"`
+	Hex    string `json:"hex"`
+}
+
+type explainPacket struct {
+	Index  int            `json:"index"`
+	Bytes  int            `json:"bytes"`
+	Layers []explainLayer `json:"layers"`
+}
+
+func newExplainCmd() *cobra.Command {
+	var stream, protoDir, format string
+	var builtinProto bool
+	var seed int64
+	cmd := &cobra.Command{
+		Use:   "explain",
+		Short: "Visualize packet layer layout and bytes",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if stream == "" {
+				return fmt.Errorf("required flag \"stream\" not set")
+			}
+			reg, err := loadRegistry(protoDir, builtinProto)
+			if err != nil {
+				return err
+			}
+			pslData, err := os.ReadFile(stream)
+			if err != nil {
+				return fmt.Errorf("read PSL: %w", err)
+			}
+			script, err := psl.NewParser(string(pslData)).ParseScript()
+			if err != nil {
+				return fmt.Errorf("parse PSL: %w", err)
+			}
+			packets := collectPackets(script.Stmts)
+			if len(packets) == 0 {
+				return fmt.Errorf("no packet statements found")
+			}
+
+			builder := packet.NewBuilder(reg)
+			if seed != 0 {
+				builder.SetRandSeed(seed)
+			}
+
+			var out []explainPacket
+			for i, pkt := range packets {
+				raw, err := builder.Build(pkt, &packet.BuildOptions{RepeatIndex: 0})
+				if err != nil {
+					return fmt.Errorf("build packet #%d: %w", i+1, err)
+				}
+				sizes, err := builder.LayerSizes(pkt)
+				if err != nil {
+					return fmt.Errorf("calc packet #%d layer size: %w", i+1, err)
+				}
+				offset := 0
+				layers := make([]explainLayer, 0, len(pkt.Layers))
+				for li, l := range pkt.Layers {
+					sz := sizes[li]
+					seg := raw[offset : offset+sz]
+					layers = append(layers, explainLayer{
+						Proto:  l.Proto,
+						Offset: offset,
+						Length: sz,
+						Hex:    strings.ToUpper(hex.EncodeToString(seg)),
+					})
+					offset += sz
+				}
+				out = append(out, explainPacket{Index: i + 1, Bytes: len(raw), Layers: layers})
+			}
+
+			if strings.EqualFold(format, "json") {
+				enc := json.NewEncoder(os.Stdout)
+				enc.SetIndent("", "  ")
+				return enc.Encode(out)
+			}
+			for _, p := range out {
+				fmt.Printf("Packet #%d (%d bytes)\n", p.Index, p.Bytes)
+				for _, l := range p.Layers {
+					fmt.Printf("  - %-12s off=%-3d len=%-3d hex=%s\n", l.Proto, l.Offset, l.Length, l.Hex)
+				}
+			}
+			return nil
+		},
+	}
+	cmd.Flags().StringVarP(&stream, "stream", "s", "", "Packet stream language file (required)")
+	cmd.Flags().StringVarP(&protoDir, "proto", "p", "proto", "Protocol definition directory (.pdl files), optional")
+	cmd.Flags().BoolVarP(&builtinProto, "builtin-proto", "b", true, "Load built-in common protocols first")
+	cmd.Flags().Int64Var(&seed, "seed", 0, "Random seed for built-in random functions (0 means auto)")
+	cmd.Flags().StringVar(&format, "format", "text", "Output format: text|json")
+	return cmd
+}
+
+func loadRegistry(pdlDir string, builtinProto bool) (*pdl.Registry, error) {
 	reg := pdl.NewRegistry()
 	if builtinProto {
 		if err := reg.LoadBuiltinCommonProtocols(); err != nil {
-			return fmt.Errorf("load builtin protocols: %w", err)
+			return nil, fmt.Errorf("load builtin protocols: %w", err)
 		}
 	}
 	if pdlDir != "" {
 		if _, err := os.Stat(pdlDir); err == nil {
 			if err := reg.LoadPDLDir(pdlDir); err != nil {
-				return fmt.Errorf("load PDL dir: %w", err)
+				return nil, fmt.Errorf("load PDL dir: %w", err)
 			}
 		} else if !os.IsNotExist(err) || pdlDir != "proto" {
-			return fmt.Errorf("read proto dir %q: %w", pdlDir, err)
+			return nil, fmt.Errorf("read proto dir %q: %w", pdlDir, err)
 		}
+	}
+	return reg, nil
+}
+
+func collectPackets(stmts []psl.Stmt) []*psl.Packet {
+	var packets []*psl.Packet
+	for _, st := range stmts {
+		switch s := st.(type) {
+		case *psl.PacketStmt:
+			if s.Packet != nil {
+				packets = append(packets, s.Packet)
+			}
+		case *psl.BlockStmt:
+			packets = append(packets, collectPackets(s.Stmts)...)
+		}
+	}
+	return packets
+}
+
+func run(pslFile, pdlDir, iface string, dryRun bool, builtinProto bool) error {
+	// 1. Load PDL protocols
+	reg, err := loadRegistry(pdlDir, builtinProto)
+	if err != nil {
+		return err
 	}
 
 	// 2. Parse PSL script
@@ -179,6 +301,9 @@ func run(pslFile, pdlDir, iface string, dryRun bool, builtinProto bool) error {
 	}
 
 	builder := packet.NewBuilder(reg)
+	if seed := viper.GetInt64("seed"); seed != 0 {
+		builder.SetRandSeed(seed)
+	}
 
 	sendFn := func(data []byte) error {
 		if dryRun {

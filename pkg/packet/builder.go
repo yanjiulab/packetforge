@@ -2,16 +2,23 @@ package packet
 
 import (
 	"encoding/binary"
+	"encoding/hex"
 	"fmt"
+	"math/rand"
 	"net"
+	"strings"
+	"sync"
+	"time"
+
 	"github.com/yanjiulab/packetforge/pkg/pdl"
 	"github.com/yanjiulab/packetforge/pkg/psl"
-	"strings"
 )
 
 // Builder builds binary packets based on PDL definitions and PSL descriptions
 type Builder struct {
 	Registry *pdl.Registry
+	rng      *rand.Rand
+	rngMu    sync.Mutex
 }
 
 // BuildOptions contains options for packet building, used for $inc/$seq evaluation
@@ -20,7 +27,37 @@ type BuildOptions struct {
 }
 
 func NewBuilder(r *pdl.Registry) *Builder {
-	return &Builder{Registry: r}
+	return &Builder{
+		Registry: r,
+		rng:      rand.New(rand.NewSource(time.Now().UnixNano())),
+	}
+}
+
+func (b *Builder) SetRandSeed(seed int64) {
+	b.rngMu.Lock()
+	defer b.rngMu.Unlock()
+	b.rng = rand.New(rand.NewSource(seed))
+}
+
+// LayerSizes computes serialized size for each packet layer.
+func (b *Builder) LayerSizes(pkt *psl.Packet) ([]int, error) {
+	headerSizes := make([]int, len(pkt.Layers))
+	for i, layer := range pkt.Layers {
+		proto := b.Registry.Get(layer.Proto)
+		if proto == nil {
+			return nil, fmt.Errorf("unknown protocol: %s", layer.Proto)
+		}
+		kv := layer.KV
+		if kv == nil {
+			kv = make(map[string]psl.Value)
+		}
+		sz, err := b.protocolFixedSize(proto, kv)
+		if err != nil {
+			return nil, err
+		}
+		headerSizes[i] = sz
+	}
+	return headerSizes, nil
 }
 
 // Build constructs a binary packet from a PSL Packet (including auto-calculated fields and checksums).
@@ -572,7 +609,7 @@ func toU64(v interface{}) uint64 {
 }
 
 // evalBuiltin evaluates $inc/$seq based on current RepeatIndex (scope determined by opts passed from engine)
-func (b *Builder) evalBuiltin(v psl.Value, opts *BuildOptions) uint64 {
+func (b *Builder) evalBuiltin(v psl.Value, opts *BuildOptions) interface{} {
 	if opts == nil {
 		opts = &BuildOptions{}
 	}
@@ -594,9 +631,65 @@ func (b *Builder) evalBuiltin(v psl.Value, opts *BuildOptions) uint64 {
 			step = v.BuiltinArgs[1]
 		}
 		return start + uint64(i)*step
+	case "$rand":
+		return b.randU64()
+	case "$randn":
+		max := uint64(0)
+		if len(v.BuiltinArgs) > 0 {
+			max = v.BuiltinArgs[0]
+		}
+		if max == 0 {
+			return uint64(0)
+		}
+		return b.randU64() % max
+	case "$randrange":
+		if len(v.BuiltinArgs) < 2 {
+			return uint64(0)
+		}
+		min, max := v.BuiltinArgs[0], v.BuiltinArgs[1]
+		if max <= min {
+			return min
+		}
+		return min + b.randU64()%((max-min)+1)
+	case "$randport":
+		return uint64(1024 + (b.randU64() % (65535 - 1024)))
+	case "$randmac":
+		raw := make([]byte, 6)
+		b.randRead(raw)
+		raw[0] = (raw[0] & 0xfe) | 0x02 // locally administered unicast
+		return fmt.Sprintf("%02x:%02x:%02x:%02x:%02x:%02x", raw[0], raw[1], raw[2], raw[3], raw[4], raw[5])
+	case "$randipv4":
+		a := 1 + (b.randU64() % 223)
+		b1 := b.randU64() % 256
+		c := b.randU64() % 256
+		d := 1 + (b.randU64() % 254)
+		return fmt.Sprintf("%d.%d.%d.%d", a, b1, c, d)
+	case "$randhex":
+		n := uint64(8)
+		if len(v.BuiltinArgs) > 0 {
+			n = v.BuiltinArgs[0]
+		}
+		if n == 0 {
+			return ""
+		}
+		raw := make([]byte, n)
+		b.randRead(raw)
+		return hex.EncodeToString(raw)
 	default:
 		return 0
 	}
+}
+
+func (b *Builder) randU64() uint64 {
+	b.rngMu.Lock()
+	defer b.rngMu.Unlock()
+	return b.rng.Uint64()
+}
+
+func (b *Builder) randRead(dst []byte) {
+	b.rngMu.Lock()
+	defer b.rngMu.Unlock()
+	_, _ = b.rng.Read(dst)
 }
 
 func (b *Builder) pslValueToGo(ft pdl.FieldType, v psl.Value) (interface{}, error) {
