@@ -78,6 +78,11 @@ pf explain -s examples/basic.psl
 pf explain -s examples/random-builtins.psl --seed 42 --format json
 ```
 
+Run fuzz mode (only `pf fuzz` parses `@fuzz` rules):
+```bash
+pf fuzz -s examples/fuzz-basic.psl -d --seed 42
+```
+
 ### Quick Example
 **1. Protocol Definition (`proto/myproto.pdl`)**
 ```pdl

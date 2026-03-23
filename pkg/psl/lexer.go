@@ -29,6 +29,7 @@ const (
 	TokForever
 	TokRepeat
 	TokInterval
+	TokFuzz
 	TokComment
 	TokUnit   // ns, us, ms, s
 	TokBuiltin // $inc, $seq
@@ -175,6 +176,9 @@ func (l *Lexer) lexAt(line, col int) Token {
 	}
 	if raw == "@interval" {
 		return Token{Kind: TokInterval, Raw: raw, Line: line, Col: col}
+	}
+	if raw == "@fuzz" {
+		return Token{Kind: TokFuzz, Raw: raw, Line: line, Col: col}
 	}
 	return Token{Kind: TokAt, Raw: raw, Line: line, Col: col}
 }

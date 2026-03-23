@@ -138,6 +138,7 @@ func newRootCmd() *cobra.Command {
 	viper.AutomaticEnv()
 	rootCmd.AddCommand(newBuiltinCmd())
 	rootCmd.AddCommand(newExplainCmd())
+	rootCmd.AddCommand(newFuzzCmd())
 
 	return rootCmd
 }
@@ -280,6 +281,229 @@ func collectPackets(stmts []psl.Stmt) []*psl.Packet {
 		}
 	}
 	return packets
+}
+
+func collectPacketStmts(stmts []psl.Stmt) []*psl.PacketStmt {
+	var out []*psl.PacketStmt
+	for _, st := range stmts {
+		switch s := st.(type) {
+		case *psl.PacketStmt:
+			out = append(out, s)
+		case *psl.BlockStmt:
+			out = append(out, collectPacketStmts(s.Stmts)...)
+		}
+	}
+	return out
+}
+
+func newFuzzCmd() *cobra.Command {
+	var stream, protoDir, iface string
+	var builtinProto, dryRun bool
+	var seed int64
+	var maxCases int
+	cmd := &cobra.Command{
+		Use:   "fuzz",
+		Short: "Run packet fuzzing rules from PSL",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if stream == "" {
+				return fmt.Errorf("required flag \"stream\" not set")
+			}
+			reg, err := loadRegistry(protoDir, builtinProto)
+			if err != nil {
+				return err
+			}
+			pslData, err := os.ReadFile(stream)
+			if err != nil {
+				return fmt.Errorf("read PSL: %w", err)
+			}
+			parser := psl.NewParserWithOptions(string(pslData), psl.ParserOptions{AllowFuzz: true})
+			script, err := parser.ParseScript()
+			if err != nil {
+				return fmt.Errorf("parse PSL: %w", err)
+			}
+			builder := packet.NewBuilder(reg)
+			if seed != 0 {
+				builder.SetRandSeed(seed)
+			}
+			sendFn := func(data []byte) error {
+				if dryRun {
+					fmt.Printf("[dry-run] Send %d bytes:\n%s\n", len(data), FormatTCPDump(data, 0))
+					return nil
+				}
+				return nil
+			}
+			if !dryRun {
+				sender, err := packet.NewSender(iface)
+				if err != nil {
+					return fmt.Errorf("create sender: %w", err)
+				}
+				defer sender.Close()
+				sendFn = sender.Send
+			}
+			stmts := collectPacketStmts(script.Stmts)
+			if len(stmts) == 0 {
+				return fmt.Errorf("no packet statements found")
+			}
+			caseID := 0
+			for si, st := range stmts {
+				cases := fuzzCasesForStmt(st, reg, maxCases)
+				if len(cases) == 0 {
+					cases = []map[string]uint64{{}}
+				}
+				for _, c := range cases {
+					caseID++
+					pkt := clonePacket(st.Packet)
+					for k, v := range c {
+						if err := applyFuzzValue(pkt, k, v); err != nil {
+							return fmt.Errorf("stmt #%d case #%d apply fuzz: %w", si+1, caseID, err)
+						}
+					}
+					data, err := builder.Build(pkt, &packet.BuildOptions{RepeatIndex: 0})
+					if err != nil {
+						return fmt.Errorf("stmt #%d case #%d build: %w", si+1, caseID, err)
+					}
+					fmt.Printf("[fuzz] stmt=%d case=%d vars=%v\n", si+1, caseID, c)
+					if err := sendFn(data); err != nil {
+						return err
+					}
+				}
+			}
+			return nil
+		},
+	}
+	cmd.Flags().StringVarP(&stream, "stream", "s", "", "Packet stream language file (required)")
+	cmd.Flags().StringVarP(&protoDir, "proto", "p", "proto", "Protocol definition directory (.pdl files), optional")
+	cmd.Flags().StringVarP(&iface, "iface", "i", "lo", "Network interface to send packets (e.g. eth0, lo)")
+	cmd.Flags().BoolVarP(&dryRun, "dry-run", "d", false, "Parse and build packets only, do not actually send")
+	cmd.Flags().BoolVarP(&builtinProto, "builtin-proto", "b", true, "Load built-in common protocols first")
+	cmd.Flags().Int64Var(&seed, "seed", 0, "Random seed for built-in random functions (0 means auto)")
+	cmd.Flags().IntVar(&maxCases, "max-cases", 0, "Maximum fuzz cases per statement (0 means no limit)")
+	return cmd
+}
+
+func fuzzCasesForStmt(st *psl.PacketStmt, reg *pdl.Registry, maxCases int) []map[string]uint64 {
+	if len(st.FuzzRules) == 0 {
+		return nil
+	}
+	valuesByRule := make([][]uint64, 0, len(st.FuzzRules))
+	maxLen := 0
+	for _, r := range st.FuzzRules {
+		ft := lookupFieldType(st.Packet, reg, r.Layer, r.Field)
+		vals := fuzzValuesForRule(r, ft)
+		valuesByRule = append(valuesByRule, vals)
+		if len(vals) > maxLen {
+			maxLen = len(vals)
+		}
+	}
+	if st.FuzzCount > 0 {
+		maxLen = st.FuzzCount
+	}
+	if maxCases > 0 && (maxLen == 0 || maxLen > maxCases) {
+		maxLen = maxCases
+	}
+	if maxLen == 0 || len(valuesByRule) == 0 {
+		return nil
+	}
+	out := make([]map[string]uint64, 0, maxLen)
+	for i := 0; i < maxLen; i++ {
+		caseVals := make(map[string]uint64)
+		for ri, r := range st.FuzzRules {
+			vals := valuesByRule[ri]
+			if len(vals) == 0 {
+				continue
+			}
+			key := r.Layer + "." + r.Field
+			caseVals[key] = vals[i%len(vals)]
+		}
+		out = append(out, caseVals)
+	}
+	return out
+}
+
+func fuzzValuesForRule(r psl.FuzzRule, ft pdl.FieldType) []uint64 {
+	switch r.Mode {
+	case psl.FuzzPick:
+		return append([]uint64(nil), r.Args...)
+	case psl.FuzzRange:
+		if len(r.Args) < 2 {
+			return nil
+		}
+		min, max := r.Args[0], r.Args[1]
+		step := uint64(1)
+		if len(r.Args) > 2 && r.Args[2] > 0 {
+			step = r.Args[2]
+		}
+		if max < min {
+			min, max = max, min
+		}
+		var out []uint64
+		for x := min; x <= max; x += step {
+			out = append(out, x)
+			if x+step < x {
+				break
+			}
+		}
+		return out
+	case psl.FuzzBoundary:
+		switch ft {
+		case pdl.TypeU8:
+			return []uint64{0, 1, 127, 254, 255}
+		case pdl.TypeU16:
+			return []uint64{0, 1, 255, 256, 1024, 65535}
+		case pdl.TypeU32:
+			return []uint64{0, 1, 65535, 65536, 2147483647, 4294967295}
+		default:
+			return []uint64{0, 1, 255, 256, 65535}
+		}
+	default:
+		return nil
+	}
+}
+
+func lookupFieldType(pkt *psl.Packet, reg *pdl.Registry, layerName, fieldName string) pdl.FieldType {
+	for _, l := range pkt.Layers {
+		if !strings.EqualFold(l.Proto, layerName) {
+			continue
+		}
+		proto := reg.Get(l.Proto)
+		if proto == nil {
+			return pdl.TypeU32
+		}
+		for _, f := range proto.Fields {
+			if strings.EqualFold(f.Name, fieldName) {
+				return f.Type
+			}
+		}
+	}
+	return pdl.TypeU32
+}
+
+func clonePacket(pkt *psl.Packet) *psl.Packet {
+	out := &psl.Packet{Payload: pkt.Payload}
+	out.Layers = make([]*psl.Layer, 0, len(pkt.Layers))
+	for _, l := range pkt.Layers {
+		nl := &psl.Layer{Proto: l.Proto, KV: make(map[string]psl.Value, len(l.KV))}
+		for k, v := range l.KV {
+			nl.KV[k] = v
+		}
+		out.Layers = append(out.Layers, nl)
+	}
+	return out
+}
+
+func applyFuzzValue(pkt *psl.Packet, path string, val uint64) error {
+	parts := strings.SplitN(path, ".", 2)
+	if len(parts) != 2 {
+		return fmt.Errorf("invalid fuzz path %q", path)
+	}
+	layerName, fieldName := parts[0], parts[1]
+	for _, l := range pkt.Layers {
+		if strings.EqualFold(l.Proto, layerName) {
+			l.KV[fieldName] = psl.Value{Kind: psl.ValNumber, Num: val}
+			return nil
+		}
+	}
+	return fmt.Errorf("layer %q not found", layerName)
 }
 
 func run(pslFile, pdlDir, iface string, dryRun bool, builtinProto bool) error {

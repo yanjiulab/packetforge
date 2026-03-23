@@ -58,3 +58,21 @@ func TestParseRandomBuiltinValue(t *testing.T) {
 		t.Fatalf("expected id builtin $randrange(1,10), got %+v", idVal)
 	}
 }
+
+func TestParseFuzzRuleOnlyInFuzzMode(t *testing.T) {
+	src := "[ ip(src=10.0.0.1, dst=10.0.0.2, id=1) ]\n@fuzz ip.id range(1,5)"
+	if _, err := NewParser(src).ParseScript(); err == nil {
+		t.Fatalf("expected normal parser to reject @fuzz")
+	}
+	script, err := NewParserWithOptions(src, ParserOptions{AllowFuzz: true}).ParseScript()
+	if err != nil {
+		t.Fatalf("expected fuzz parser to accept @fuzz, got err: %v", err)
+	}
+	ps, ok := script.Stmts[0].(*PacketStmt)
+	if !ok {
+		t.Fatalf("expected PacketStmt, got %T", script.Stmts[0])
+	}
+	if len(ps.FuzzRules) != 1 {
+		t.Fatalf("expected 1 fuzz rule, got %d", len(ps.FuzzRules))
+	}
+}

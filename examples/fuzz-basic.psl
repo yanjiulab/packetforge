@@ -1,0 +1,10 @@
+[
+  eth(src=02:00:00:00:00:11, dst=02:00:00:00:00:22, type=0x0800)
+  ip(src=10.0.0.1, dst=10.0.0.2, ttl=64, id=1, protocol=17)
+  udp(sport=12345, dport=9000)
+  `fuzz-payload`
+]
+@fuzz ip.ttl boundary
+@fuzz udp.dport pick(53,67,68,123,9000)
+@fuzz ip.id range(1,20,3)
+@fuzz count 6

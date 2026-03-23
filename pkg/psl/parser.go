@@ -12,12 +12,22 @@ type Parser struct {
 	lex  *Lexer
 	tok  Token
 	env  map[string]Value // Constant environment
+	allowFuzz bool
 }
 
 func NewParser(src string) *Parser {
+	return NewParserWithOptions(src, ParserOptions{})
+}
+
+type ParserOptions struct {
+	AllowFuzz bool
+}
+
+func NewParserWithOptions(src string, opt ParserOptions) *Parser {
 	p := &Parser{
 		lex: NewLexer(src),
 		env: make(map[string]Value),
+		allowFuzz: opt.AllowFuzz,
 	}
 	p.advance()
 	return p
@@ -95,7 +105,10 @@ func (p *Parser) parseAsyncBlock() (Stmt, error) {
 	if err != nil {
 		return nil, err
 	}
-	repeat, interval := p.parseModifiers()
+	repeat, interval, _, _, err := p.parseModifiers()
+	if err != nil {
+		return nil, err
+	}
 	block.Repeat = repeat
 	block.Interval = interval
 	block.Async = true
@@ -108,7 +121,10 @@ func (p *Parser) parseBlock() (Stmt, error) {
 	if err != nil {
 		return nil, err
 	}
-	repeat, interval := p.parseModifiers()
+	repeat, interval, _, _, err := p.parseModifiers()
+	if err != nil {
+		return nil, err
+	}
 	block.Repeat = repeat
 	block.Interval = interval
 	return block, nil
@@ -134,8 +150,9 @@ func (p *Parser) parseBlockContent() (*BlockStmt, error) {
 }
 
 // parseModifiers parses optional @repeat / @interval, can be multi-line
-func (p *Parser) parseModifiers() (repeat int, interval Dur) {
+func (p *Parser) parseModifiers() (repeat int, interval Dur, fuzzRules []FuzzRule, fuzzCount int, err error) {
 	repeat = 0
+	fuzzCount = 0
 	for {
 		if p.at(TokRepeat) {
 			p.advance()
@@ -174,9 +191,35 @@ func (p *Parser) parseModifiers() (repeat int, interval Dur) {
 			}
 			continue
 		}
+		if p.at(TokFuzz) {
+			if !p.allowFuzz {
+				return 0, Dur{}, nil, 0, fmt.Errorf("@fuzz is only supported in pf fuzz mode at %d:%d", p.tok.Line, p.tok.Col)
+			}
+			p.advance()
+			if p.at(TokIdent) && strings.EqualFold(p.tok.Raw, "count") {
+				p.advance()
+				if !p.at(TokNumber) {
+					return 0, Dur{}, nil, 0, fmt.Errorf("expected fuzz count number at %d:%d", p.tok.Line, p.tok.Col)
+				}
+				n, _ := strconv.Atoi(p.tok.Raw)
+				fuzzCount = n
+				p.advance()
+				continue
+			}
+			layer, field, e := p.parseFuzzPath()
+			if e != nil {
+				return 0, Dur{}, nil, 0, e
+			}
+			mode, args, e := p.parseFuzzStrategy()
+			if e != nil {
+				return 0, Dur{}, nil, 0, e
+			}
+			fuzzRules = append(fuzzRules, FuzzRule{Layer: layer, Field: field, Mode: mode, Args: args})
+			continue
+		}
 		break
 	}
-	return repeat, interval
+	return repeat, interval, fuzzRules, fuzzCount, nil
 }
 
 // parsePacketStmt ::= Packet Modifiers?  (returns nil when no packet, does not consume modifiers)
@@ -188,8 +231,68 @@ func (p *Parser) parsePacketStmt() (Stmt, error) {
 	if packet == nil {
 		return nil, nil
 	}
-	repeat, interval := p.parseModifiers()
-	return &PacketStmt{Packet: packet, Repeat: repeat, Interval: interval}, nil
+	repeat, interval, fuzzRules, fuzzCount, err := p.parseModifiers()
+	if err != nil {
+		return nil, err
+	}
+	return &PacketStmt{Packet: packet, Repeat: repeat, Interval: interval, FuzzRules: fuzzRules, FuzzCount: fuzzCount}, nil
+}
+
+func (p *Parser) parseFuzzPath() (string, string, error) {
+	if !p.at(TokIdent) {
+		return "", "", fmt.Errorf("expected fuzz layer name at %d:%d", p.tok.Line, p.tok.Col)
+	}
+	layer := p.tok.Raw
+	p.advance()
+	if !p.at(TokIdent) || p.tok.Raw != "." {
+		return "", "", fmt.Errorf("expected '.' in fuzz path at %d:%d", p.tok.Line, p.tok.Col)
+	}
+	p.advance()
+	if !p.at(TokIdent) {
+		return "", "", fmt.Errorf("expected fuzz field name at %d:%d", p.tok.Line, p.tok.Col)
+	}
+	field := p.tok.Raw
+	p.advance()
+	return layer, field, nil
+}
+
+func (p *Parser) parseFuzzStrategy() (FuzzMode, []uint64, error) {
+	if !p.at(TokIdent) {
+		return 0, nil, fmt.Errorf("expected fuzz strategy at %d:%d", p.tok.Line, p.tok.Col)
+	}
+	name := strings.ToLower(p.tok.Raw)
+	p.advance()
+	switch name {
+	case "boundary":
+		return FuzzBoundary, nil, nil
+	case "pick", "range":
+		if !p.at(TokLParen) {
+			return 0, nil, fmt.Errorf("expected '(' after fuzz strategy at %d:%d", p.tok.Line, p.tok.Col)
+		}
+		p.advance()
+		var args []uint64
+		for !p.at(TokRParen) && !p.at(TokEOF) {
+			if !p.at(TokNumber) {
+				return 0, nil, fmt.Errorf("expected numeric fuzz argument at %d:%d", p.tok.Line, p.tok.Col)
+			}
+			n, _ := strconv.ParseUint(p.tok.Raw, 0, 64)
+			args = append(args, n)
+			p.advance()
+			if p.at(TokComma) {
+				p.advance()
+			}
+		}
+		if !p.at(TokRParen) {
+			return 0, nil, fmt.Errorf("expected ')' for fuzz strategy at %d:%d", p.tok.Line, p.tok.Col)
+		}
+		p.advance()
+		if name == "pick" {
+			return FuzzPick, args, nil
+		}
+		return FuzzRange, args, nil
+	default:
+		return 0, nil, fmt.Errorf("unknown fuzz strategy %q at %d:%d", name, p.tok.Line, p.tok.Col)
+	}
 }
 
 // parsePacket ::= MultiLinePacket | SingleLinePacket

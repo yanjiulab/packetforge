@@ -15,6 +15,8 @@ type PacketStmt struct {
 	Packet    *Packet
 	Repeat    int  // 0 = no repeat/once, >0 = count, -1 = forever
 	Interval  Dur  // Transmission interval
+	FuzzRules []FuzzRule
+	FuzzCount int // 0 means auto based on rules
 }
 
 func (*PacketStmt) stmt() {}
@@ -68,6 +70,21 @@ const (
 	ValList
 	ValMap
 )
+
+type FuzzMode int
+
+const (
+	FuzzBoundary FuzzMode = iota
+	FuzzPick
+	FuzzRange
+)
+
+type FuzzRule struct {
+	Layer string
+	Field string
+	Mode  FuzzMode
+	Args  []uint64
+}
 
 // Payload payload: encoding type + raw content
 type Payload struct {
