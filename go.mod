@@ -5,6 +5,7 @@ go 1.23.0
 toolchain go1.23.5
 
 require (
+	github.com/google/gopacket v1.1.19
 	github.com/spf13/cobra v1.10.2
 	github.com/spf13/viper v1.21.0
 )

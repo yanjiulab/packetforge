@@ -10,25 +10,42 @@ permissions:
 
 jobs:
   build-and-release:
-    runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
         include:
           # Linux
-          - goos: linux
+          - runner: ubuntu-latest
+            goos: linux
             goarch: amd64
-          - goos: linux
+            cgo_enabled: "0"
+          - runner: ubuntu-latest
+            goos: linux
             goarch: arm64
-          - goos: linux
+            cgo_enabled: "0"
+          - runner: ubuntu-latest
+            goos: linux
             goarch: arm
             goarm: "7"
+            cgo_enabled: "0"
 
-          # macOS
-          # - goos: darwin
-          #   goarch: amd64
-          # - goos: darwin
-          #   goarch: arm64
+          # Windows (pcap sender path requires cgo)
+          - runner: windows-latest
+            goos: windows
+            goarch: amd64
+            cgo_enabled: "1"
+
+          # macOS (pcap sender path requires cgo)
+          - runner: macos-latest
+            goos: darwin
+            goarch: amd64
+            cgo_enabled: "1"
+          - runner: macos-latest
+            goos: darwin
+            goarch: arm64
+            cgo_enabled: "1"
+
+    runs-on: ${{ matrix.runner }}
 
     steps:
       - name: Checkout
@@ -58,7 +75,7 @@ jobs:
           GOOS: ${{ matrix.goos }}
           GOARCH: ${{ matrix.goarch }}
           GOARM: ${{ matrix.goarm }}
-          CGO_ENABLED: "0"
+          CGO_ENABLED: ${{ matrix.cgo_enabled }}
         run: |
           set -euo pipefail
           mkdir -p dist
@@ -69,10 +86,10 @@ jobs:
 
           # ldflags version injection
           LDFLAGS="-s -w \
-            -X github.com/yanjiulab/packetforge/internal/version.Version=${VERSION} \
-            -X github.com/yanjiulab/packetforge/internal/version.Commit=${COMMIT} \
-            -X github.com/yanjiulab/packetforge/internal/version.Date=${DATE} \
-            -X github.com/yanjiulab/packetforge/internal/version.BuiltBy=github-actions"
+            -X main.Version=${VERSION} \
+            -X main.Commit=${COMMIT} \
+            -X main.Date=${DATE} \
+            -X main.BuiltBy=github-actions"
 
           EXT=""
           if [[ "${GOOS}" == "windows" ]]; then
