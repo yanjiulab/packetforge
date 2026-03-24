@@ -107,7 +107,7 @@ jobs:
           pushd dist >/dev/null
           BASENAME="$(basename "${OUTDIR}")"
           if [[ "${GOOS}" == "windows" ]]; then
-            zip -qr "${BASENAME}.zip" "${BASENAME}"
+            powershell -NoProfile -Command "Compress-Archive -Path '${BASENAME}' -DestinationPath '${BASENAME}.zip' -Force"
           else
             tar -czf "${BASENAME}.tar.gz" "${BASENAME}"
           fi
