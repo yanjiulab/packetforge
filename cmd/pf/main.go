@@ -8,6 +8,9 @@ import (
 	"os"
 	"runtime"
 	"strings"
+	"sync"
+	"sync/atomic"
+	"time"
 
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
@@ -17,14 +20,24 @@ import (
 	"github.com/yanjiulab/packetforge/pkg/psl"
 )
 
+// isRecvTimeout is true when libpcap returns no packet within the handle read timeout
+// (gopacket pcap.NextErrorTimeoutExpired, Error() == "Timeout Expired").
+// We match by string so cmd/pf does not import gopacket/pcap (keeps Linux CGO=0 builds working).
+func isRecvTimeout(err error) bool {
+	return err != nil && err.Error() == "Timeout Expired"
+}
+
 // FormatTCPDump converts binary buffer to tcpdump-style string
 // Parameters:
-//   buf: binary data to format
-//   startOffset: starting address offset (e.g. 0 for 0x0000:)
+//
+//	buf: binary data to format
+//	startOffset: starting address offset (e.g. 0 for 0x0000:)
+//
 // Returns:
-//   tcpdump-style formatted string (each line: offset + hex + ASCII)
+//
+//	tcpdump-style formatted string (each line: offset + hex + ASCII)
 func FormatTCPDump(buf []byte, startOffset int) string {
-	const bytesPerLine = 16 // tcpdump default: 16 bytes per line
+	const bytesPerLine = 16         // tcpdump default: 16 bytes per line
 	var dumpBuilder strings.Builder // Build final output string
 	offset := startOffset           // Current address offset
 
@@ -65,7 +78,7 @@ func FormatTCPDump(buf []byte, startOffset int) string {
 		}
 
 		// 4. Add newline (except for last line)
-		if i + bytesPerLine < len(buf) {
+		if i+bytesPerLine < len(buf) {
 			dumpBuilder.WriteString("\n")
 		}
 
@@ -113,7 +126,19 @@ func newRootCmd() *cobra.Command {
 				return fmt.Errorf("required flag \"stream\" not set")
 			}
 
-			return run(pslFile, viper.GetString("proto"), viper.GetString("iface"), viper.GetBool("dry-run"), viper.GetBool("builtin-proto"))
+			recvWaitExplicit := cmd.Flags().Changed("recv-wait") || os.Getenv("PF_RECV_WAIT") != ""
+			return run(
+				pslFile,
+				viper.GetString("proto"),
+				viper.GetString("iface"),
+				viper.GetBool("dry-run"),
+				viper.GetBool("builtin-proto"),
+				viper.GetBool("recv"),
+				viper.GetDuration("recv-wait"),
+				viper.GetInt("recv-count"),
+				viper.GetString("recv-bpf"),
+				recvWaitExplicit,
+			)
 		},
 	}
 
@@ -125,6 +150,10 @@ func newRootCmd() *cobra.Command {
 	flags.StringP("stream", "s", "", "Packet stream language file (required)")
 	flags.StringP("iface", "i", "lo", "Network interface to send packets (e.g. eth0, lo)")
 	flags.BoolP("dry-run", "d", false, "Parse and build packets only, do not actually send")
+	flags.BoolP("recv", "r", false, "Start receiving packets before sending and print received hex dump")
+	flags.Duration("recv-wait", time.Second, "Wait duration for receiving packets after send completes (e.g. 500ms, 2s)")
+	flags.Int("recv-count", 0, "Stop receive when this many packets are captured (0 means unlimited)")
+	flags.String("recv-bpf", "", "tcpdump-style BPF filter for recv (e.g. icmp, tcp port 80); Linux uses libpcap when set")
 	flags.BoolP("builtin-proto", "b", true, "Load built-in common protocols first (eth/vlan/arp/arp_request/arp_reply/ip/ipv6/icmp/icmp6/ndp_ns/ndp_na/udp/tcp)")
 	flags.Int64("seed", 0, "Random seed for built-in random functions (0 means auto)")
 
@@ -132,6 +161,10 @@ func newRootCmd() *cobra.Command {
 	_ = viper.BindPFlag("stream", flags.Lookup("stream"))
 	_ = viper.BindPFlag("iface", flags.Lookup("iface"))
 	_ = viper.BindPFlag("dry-run", flags.Lookup("dry-run"))
+	_ = viper.BindPFlag("recv", flags.Lookup("recv"))
+	_ = viper.BindPFlag("recv-wait", flags.Lookup("recv-wait"))
+	_ = viper.BindPFlag("recv-count", flags.Lookup("recv-count"))
+	_ = viper.BindPFlag("recv-bpf", flags.Lookup("recv-bpf"))
 	_ = viper.BindPFlag("builtin-proto", flags.Lookup("builtin-proto"))
 	_ = viper.BindPFlag("seed", flags.Lookup("seed"))
 	viper.SetEnvPrefix("PF")
@@ -506,7 +539,7 @@ func applyFuzzValue(pkt *psl.Packet, path string, val uint64) error {
 	return fmt.Errorf("layer %q not found", layerName)
 }
 
-func run(pslFile, pdlDir, iface string, dryRun bool, builtinProto bool) error {
+func run(pslFile, pdlDir, iface string, dryRun bool, builtinProto bool, recv bool, recvWait time.Duration, recvCount int, recvBpf string, recvWaitExplicit bool) error {
 	// 1. Load PDL protocols
 	reg, err := loadRegistry(pdlDir, builtinProto)
 	if err != nil {
@@ -537,17 +570,110 @@ func run(pslFile, pdlDir, iface string, dryRun bool, builtinProto bool) error {
 		return nil
 	}
 
+	if recvCount < 0 {
+		return fmt.Errorf("--recv-count must be >= 0")
+	}
+
+	if recv {
+		sendFn = func(data []byte) error {
+			fmt.Printf("[send] %d bytes:\n%s\n", len(data), FormatTCPDump(data, 0))
+			if dryRun {
+				return nil
+			}
+			return nil
+		}
+	}
+
+	var (
+		recvWG         sync.WaitGroup
+		recvDone       chan struct{}
+		receiver       *packet.Receiver
+		sendPhaseEnded atomic.Bool
+		drainOnce      sync.Once
+		drainDone      chan struct{}
+	)
+
+	if recv && !dryRun {
+		drainDone = make(chan struct{})
+		var err error
+		receiver, err = packet.NewReceiver(iface, recvBpf)
+		if err != nil {
+			return fmt.Errorf("create receiver: %w", err)
+		}
+		recvDone = make(chan struct{})
+		recvWG.Add(1)
+		go func() {
+			defer recvWG.Done()
+			defer func() {
+				drainOnce.Do(func() { close(drainDone) })
+			}()
+			drainCount := 0
+			for {
+				data, err := receiver.Recv()
+				if err != nil {
+					if isRecvTimeout(err) {
+						continue
+					}
+					select {
+					case <-recvDone:
+						return
+					default:
+						fmt.Fprintf(os.Stderr, "[recv] error: %v\n", err)
+						return
+					}
+				}
+				fmt.Printf("[recv] %d bytes:\n%s\n", len(data), FormatTCPDump(data, 0))
+				if !sendPhaseEnded.Load() {
+					continue
+				}
+				drainCount++
+				if recvCount > 0 && drainCount >= recvCount {
+					return
+				}
+			}
+		}()
+	}
+
 	if !dryRun {
 		sender, err := packet.NewSender(iface)
 		if err != nil {
 			return fmt.Errorf("create sender: %w", err)
 		}
 		defer sender.Close()
-		sendFn = sender.Send
+		sendRaw := sender.Send
+		if recv {
+			sendFn = func(data []byte) error {
+				fmt.Printf("[send] %d bytes:\n%s\n", len(data), FormatTCPDump(data, 0))
+				return sendRaw(data)
+			}
+		} else {
+			sendFn = sendRaw
+		}
 	}
 
-	if err := engine.Run(script, builder, sendFn); err != nil {
-		return fmt.Errorf("run: %w", err)
+	runErr := engine.Run(script, builder, sendFn)
+	if recv && !dryRun {
+		sendPhaseEnded.Store(true)
+		// recv-count: wait until N drain-phase packets unless user set --recv-wait (then cap by time).
+		// Default recv-wait (1s) must not stop recv before N packets — that was the bug.
+		if recvCount > 0 {
+			if recvWaitExplicit && recvWait > 0 {
+				select {
+				case <-drainDone:
+				case <-time.After(recvWait):
+				}
+			} else {
+				<-drainDone
+			}
+		} else if recvWait > 0 {
+			<-time.After(recvWait)
+		}
+		close(recvDone)
+		_ = receiver.Close()
+		recvWG.Wait()
+	}
+	if runErr != nil {
+		return fmt.Errorf("run: %w", runErr)
 	}
 	return nil
 }
