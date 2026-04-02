@@ -172,6 +172,7 @@ func newRootCmd() *cobra.Command {
 	rootCmd.AddCommand(newBuiltinCmd())
 	rootCmd.AddCommand(newExplainCmd())
 	rootCmd.AddCommand(newFuzzCmd())
+	rootCmd.AddCommand(newGenCmd())
 
 	return rootCmd
 }

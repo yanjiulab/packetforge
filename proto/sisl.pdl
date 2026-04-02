@@ -1,0 +1,40 @@
+struct endpoint {
+    ip ipv4
+    port u16
+}
+
+struct metric {
+    id u16
+    kind u8
+    reserved u8
+    value u32
+}
+
+struct route_hop {
+    hop_id u16
+    cost u16
+    next endpoint
+}
+
+protocol sisl {
+    magic u32 = 0x5349534c
+    version u8 = 1
+    header_len u8 = $len
+    flags u16
+    msg_type u16
+    seq u32
+    session_id u64
+
+    src endpoint
+    dst endpoint
+
+    metric_count u16
+    metrics [metric_count]metric
+
+    route_count u8
+    routes [route_count]route_hop
+
+    extra []metric
+
+    checksum u16 = $cksum
+}

@@ -27,6 +27,7 @@ go build -o pf ./cmd/pf
 | `pf fuzz` | run fuzz rules from PSL | Yes | Yes (`--dry-run` disables) | per-case values + send/dry-run output |
 | `pf explain` | visualize packet layout | No | No | layer offsets/length/hex (text or JSON) |
 | `pf builtin` | list built-in protocols | N/A | No | protocol name list |
+| `pf gen` | generate Go/C/C++ struct definitions from PDL | N/A | No | generated source/header files |
 
 ## Core CLI Usage
 
@@ -88,6 +89,28 @@ Output contains, per packet:
 ```bash
 pf builtin
 ```
+
+### `pf gen`
+
+```bash
+pf gen -p proto -o generated --lang go
+pf gen -p proto -o generated --lang all
+pf gen -p proto -o generated --lang cpp --expand-builtin-heads
+```
+
+Notes:
+
+- Supported `--lang`: `go`, `c`, `cpp`, `all`.
+- Dynamic arrays are supported:
+  - Go: `[]T`
+  - C: `T*` (for `[]T` an extra `<name>_len` field is generated)
+  - C++: `std::vector<T>`
+- C++ output is split into two files:
+  - `pdl_gen.hpp`: type definitions
+  - `pdl_gen_codec.hpp`: serialize/deserialize codec functions and usage comments
+- Field-length arrays (`[field]Type`) are generated as pointer + comment (length is referenced field).
+- By default builtin head fields (`mac`, `ipv4`, `ipv6`) are kept as named types (`Mac`/`IPv4`/`IPv6`); use `--expand-builtin-heads` to expand to raw byte arrays.
+- C/C++ generated struct names no longer use `pf_` / `Pf` prefixes.
 
 ## DSL Highlights
 
