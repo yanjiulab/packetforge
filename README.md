@@ -137,6 +137,10 @@ Notes:
   - `@repeat N` / `@repeat forever`
   - `@interval 100ms|1s|...`
   - `@expect [ ... ]` (packet stmt only; matching behavior depends on `--expect-match-mode`)
+    - `subset` mode supports built-in locator layers (`eth/ip/ipv6/udp/tcp`) and one custom layer as the last layer.
+    - For custom layer in `subset`, you must explicitly provide full locator chain before it (e.g. `eth() ip() udp() myproto(...)`).
+    - Custom layer decode currently supports scalar fields and nested `struct` only (arrays are not supported).
+    - If payload is specified in `@expect`, payload bytes are matched exactly.
   - `@expect_timeout 2s|500ms|...` (packet stmt only; default `1s`)
   - `@exit` (for packet stmt: exit script after this packet statement finishes)
   - `@ignore` (stmt modifier, place after packet/block like `@interval`; skip executing that packet/block)
@@ -180,6 +184,12 @@ Directive demo:
 
 ```bash
 pf -s examples/directives-ignore-exit.psl -d
+```
+
+Custom subset expect demo:
+
+```bash
+pf -s examples/expect-custom-subset.psl -p proto -r --expect-match-mode subset --recv-match-only --recv-view packetview
 ```
 
 More examples are in `examples/`, and protocol definitions are in `proto/`.

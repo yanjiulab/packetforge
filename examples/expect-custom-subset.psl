@@ -1,0 +1,16 @@
+// Demonstrate custom protocol subset matching in @expect.
+// Requires:
+// 1) subset mode: --expect-match-mode subset
+// 2) explicit locator chain before custom layer: eth() ip() udp()
+// 3) custom protocol loaded from proto dir (here using proto/sisl.pdl)
+//
+// Example:
+//   sudo ./pf -s examples/expect-custom-subset.psl -p proto -r --expect-match-mode subset --recv-match-only --recv-view packetview
+
+[
+  eth()
+  ip(src=10.0.0.1, dst=10.0.0.2)
+  udp(sport=5000, dport=7000)
+]
+@expect [ eth() ip() udp() sisl(msg_type=2, seq=100, dst={ ip=10.0.0.1, port=5000 }) ]
+@expect_timeout 20s

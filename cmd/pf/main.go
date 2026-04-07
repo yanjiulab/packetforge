@@ -789,9 +789,13 @@ func run(pslFile, pdlDir, iface string, dryRun bool, goLiteral, cLiteral, cppLit
 			if recvFrames == nil {
 				return fmt.Errorf("@expect requires -r/--recv in non-dry-run mode")
 			}
-			expectBytes, err := builder.Build(expect, &packet.BuildOptions{RepeatIndex: opts.RepeatIndex})
-			if err != nil {
-				return fmt.Errorf("build @expect packet: %w", err)
+			var expectBytes []byte
+			if strings.EqualFold(expectMatchMode, "exact") {
+				var err error
+				expectBytes, err = builder.Build(expect, &packet.BuildOptions{RepeatIndex: opts.RepeatIndex})
+				if err != nil {
+					return fmt.Errorf("build @expect packet: %w", err)
+				}
 			}
 			fmt.Printf("[expect] waiting up to %s for expected packet (%s mode)\n", timeout, strings.ToLower(expectMatchMode))
 			timer := time.NewTimer(timeout)
@@ -805,7 +809,11 @@ func run(pslFile, pdlDir, iface string, dryRun bool, goLiteral, cLiteral, cppLit
 					seen++
 					matched := false
 					if strings.EqualFold(expectMatchMode, "subset") {
-						matched = matchExpectSubset(expect, got)
+						var e error
+						matched, e = matchExpectSubset(expect, got, reg)
+						if e != nil {
+							return e
+						}
 					} else {
 						matched = bytes.Equal(got, expectBytes)
 					}
@@ -865,24 +873,301 @@ func run(pslFile, pdlDir, iface string, dryRun bool, goLiteral, cLiteral, cppLit
 	return nil
 }
 
-func matchExpectSubset(expect *psl.Packet, got []byte) bool {
-	view, ok := parsePacketView(got)
-	if !ok || expect == nil {
+func matchExpectSubset(expect *psl.Packet, got []byte, reg *pdl.Registry) (bool, error) {
+	if expect == nil {
+		return false, nil
+	}
+	customIdx := -1
+	for i, l := range expect.Layers {
+		name := strings.ToLower(l.Proto)
+		if !isBuiltinLocatorLayer(name) {
+			customIdx = i
+			break
+		}
+	}
+	if customIdx >= 0 {
+		if customIdx == 0 || strings.ToLower(expect.Layers[0].Proto) != "eth" {
+			return false, fmt.Errorf("@expect custom layer requires explicit locator chain starting with eth()")
+		}
+		if customIdx != len(expect.Layers)-1 {
+			return false, fmt.Errorf("@expect custom layer must be the last layer in subset mode")
+		}
+		for i := 0; i < customIdx; i++ {
+			if !isBuiltinLocatorLayer(strings.ToLower(expect.Layers[i].Proto)) {
+				return false, fmt.Errorf("@expect custom layer requires explicit built-in locator layers before it")
+			}
+		}
+		customLayer := expect.Layers[customIdx]
+		proto := reg.Get(customLayer.Proto)
+		if proto == nil {
+			return false, fmt.Errorf("@expect custom protocol %q not found in registry", customLayer.Proto)
+		}
+		off := 0
+		for i := 0; i < customIdx; i++ {
+			next, ok := consumeAndMatchBuiltin(expect.Layers[i], got, off)
+			if !ok {
+				return false, nil
+			}
+			off = next
+		}
+		offAfter := off
+		ok, err := decodeAndMatchProtocolSubset(proto, customLayer.KV, got, &offAfter, reg, strings.ToLower(customLayer.Proto)+".")
+		if err != nil {
+			return false, err
+		}
+		if !ok {
+			return false, nil
+		}
+		return matchExpectedPayload(expect, got, offAfter), nil
+	}
+
+	off := 0
+	for _, l := range expect.Layers {
+		next, ok := consumeAndMatchBuiltin(l, got, off)
+		if !ok {
+			return false, nil
+		}
+		off = next
+	}
+	return matchExpectedPayload(expect, got, off), nil
+}
+
+func isBuiltinLocatorLayer(name string) bool {
+	switch strings.ToLower(name) {
+	case "eth", "ip", "ipv6", "udp", "tcp":
+		return true
+	default:
 		return false
 	}
-	for _, l := range expect.Layers {
-		layer := strings.ToLower(l.Proto)
-		if !view.present[layer] {
+}
+
+func consumeAndMatchBuiltin(layer *psl.Layer, data []byte, off int) (int, bool) {
+	name := strings.ToLower(layer.Proto)
+	switch name {
+	case "eth":
+		if len(data) < off+14 {
+			return off, false
+		}
+		fields := map[string]string{
+			"src":  formatMAC(data[off+6 : off+12]),
+			"dst":  formatMAC(data[off : off+6]),
+			"type": fmt.Sprintf("%d", binary.BigEndian.Uint16(data[off+12:off+14])),
+		}
+		if !matchLayerKV(layer.KV, fields) {
+			return off, false
+		}
+		return off + 14, true
+	case "ip":
+		if len(data) < off+20 {
+			return off, false
+		}
+		ver := data[off] >> 4
+		if ver != 4 {
+			return off, false
+		}
+		ihl := int(data[off]&0x0f) * 4
+		if ihl < 20 || len(data) < off+ihl {
+			return off, false
+		}
+		fields := map[string]string{
+			"src":      formatIPv4(data[off+12 : off+16]),
+			"dst":      formatIPv4(data[off+16 : off+20]),
+			"id":       fmt.Sprintf("%d", binary.BigEndian.Uint16(data[off+4:off+6])),
+			"ttl":      fmt.Sprintf("%d", data[off+8]),
+			"protocol": fmt.Sprintf("%d", data[off+9]),
+		}
+		if !matchLayerKV(layer.KV, fields) {
+			return off, false
+		}
+		return off + ihl, true
+	case "udp":
+		if len(data) < off+8 {
+			return off, false
+		}
+		fields := map[string]string{
+			"sport": fmt.Sprintf("%d", binary.BigEndian.Uint16(data[off:off+2])),
+			"dport": fmt.Sprintf("%d", binary.BigEndian.Uint16(data[off+2:off+4])),
+		}
+		if !matchLayerKV(layer.KV, fields) {
+			return off, false
+		}
+		return off + 8, true
+	case "tcp":
+		if len(data) < off+20 {
+			return off, false
+		}
+		hdrLen := int((data[off+12] >> 4) * 4)
+		if hdrLen < 20 || len(data) < off+hdrLen {
+			return off, false
+		}
+		fields := map[string]string{
+			"sport": fmt.Sprintf("%d", binary.BigEndian.Uint16(data[off:off+2])),
+			"dport": fmt.Sprintf("%d", binary.BigEndian.Uint16(data[off+2:off+4])),
+		}
+		if !matchLayerKV(layer.KV, fields) {
+			return off, false
+		}
+		return off + hdrLen, true
+	case "ipv6":
+		if len(data) < off+40 {
+			return off, false
+		}
+		if data[off]>>4 != 6 {
+			return off, false
+		}
+		fields := map[string]string{
+			"src":       formatIPv6(data[off+8 : off+24]),
+			"dst":       formatIPv6(data[off+24 : off+40]),
+			"protocol":  fmt.Sprintf("%d", data[off+6]),
+			"hop_limit": fmt.Sprintf("%d", data[off+7]),
+		}
+		if !matchLayerKV(layer.KV, fields) {
+			return off, false
+		}
+		return off + 40, true
+	default:
+		return off, false
+	}
+}
+
+func decodeAndMatchProtocolSubset(proto *pdl.Protocol, expectKV map[string]psl.Value, data []byte, off *int, reg *pdl.Registry, pathPrefix string) (bool, error) {
+	for _, f := range proto.Fields {
+		name := strings.ToLower(f.Name)
+		exp, hasExp := expectKV[name]
+		switch f.Type {
+		case pdl.TypeU8:
+			if *off+1 > len(data) {
+				return false, nil
+			}
+			val := uint64(data[*off])
+			*off += 1
+			if hasExp && (exp.Kind != psl.ValNumber || exp.Num != val) {
+				return false, nil
+			}
+		case pdl.TypeU16:
+			if *off+2 > len(data) {
+				return false, nil
+			}
+			val := uint64(binary.BigEndian.Uint16(data[*off : *off+2]))
+			*off += 2
+			if hasExp && (exp.Kind != psl.ValNumber || exp.Num != val) {
+				return false, nil
+			}
+		case pdl.TypeU32:
+			if *off+4 > len(data) {
+				return false, nil
+			}
+			val := uint64(binary.BigEndian.Uint32(data[*off : *off+4]))
+			*off += 4
+			if hasExp && (exp.Kind != psl.ValNumber || exp.Num != val) {
+				return false, nil
+			}
+		case pdl.TypeU64:
+			if *off+8 > len(data) {
+				return false, nil
+			}
+			val := binary.BigEndian.Uint64(data[*off : *off+8])
+			*off += 8
+			if hasExp && (exp.Kind != psl.ValNumber || exp.Num != val) {
+				return false, nil
+			}
+		case pdl.TypeMAC:
+			if *off+6 > len(data) {
+				return false, nil
+			}
+			val := formatMAC(data[*off : *off+6])
+			*off += 6
+			if hasExp && (exp.Kind != psl.ValMAC || !strings.EqualFold(exp.MAC, val)) {
+				return false, nil
+			}
+		case pdl.TypeIPv4:
+			if *off+4 > len(data) {
+				return false, nil
+			}
+			val := formatIPv4(data[*off : *off+4])
+			*off += 4
+			if hasExp && (exp.Kind != psl.ValIP || !strings.EqualFold(exp.IP, val)) {
+				return false, nil
+			}
+		case pdl.TypeIPv6:
+			if *off+16 > len(data) {
+				return false, nil
+			}
+			val := formatIPv6(data[*off : *off+16])
+			*off += 16
+			if hasExp && (exp.Kind != psl.ValIP || !strings.EqualFold(exp.IP, val)) {
+				return false, nil
+			}
+		case pdl.TypeStructRef:
+			st := reg.GetStruct(f.StructName)
+			if st == nil {
+				return false, fmt.Errorf("custom expect decode: struct %q not found at %s%s", f.StructName, pathPrefix, name)
+			}
+			var childKV map[string]psl.Value
+			if hasExp {
+				if exp.Kind != psl.ValMap {
+					return false, fmt.Errorf("custom expect decode: expected map for field %s%s", pathPrefix, name)
+				}
+				childKV = exp.Map
+			}
+			ok, err := decodeAndMatchStructSubset(st, childKV, data, off, reg, pathPrefix+name+".")
+			if err != nil || !ok {
+				return ok, err
+			}
+		case pdl.TypeStructArray:
+			return false, fmt.Errorf("custom expect decode: arrays are not supported yet (field %s%s)", pathPrefix, name)
+		default:
+			return false, fmt.Errorf("custom expect decode: unsupported field type at %s%s", pathPrefix, name)
+		}
+	}
+	return true, nil
+}
+
+func decodeAndMatchStructSubset(st *pdl.Struct, expectKV map[string]psl.Value, data []byte, off *int, reg *pdl.Registry, pathPrefix string) (bool, error) {
+	p := &pdl.Protocol{Name: st.Name, Fields: st.Fields}
+	if expectKV == nil {
+		expectKV = map[string]psl.Value{}
+	}
+	return decodeAndMatchProtocolSubset(p, expectKV, data, off, reg, pathPrefix)
+}
+
+func matchLayerKV(expect map[string]psl.Value, actual map[string]string) bool {
+	for k, v := range expect {
+		key := strings.ToLower(k)
+		got, ok := actual[key]
+		if !ok {
 			return false
 		}
-		for k, v := range l.KV {
-			key := layer + "." + strings.ToLower(k)
-			if !matchExpectedField(view.fields, key, v) {
+		switch v.Kind {
+		case psl.ValIP:
+			if !strings.EqualFold(v.IP, got) {
 				return false
 			}
+		case psl.ValMAC:
+			if !strings.EqualFold(strings.ToLower(v.MAC), got) {
+				return false
+			}
+		case psl.ValNumber:
+			if got != fmt.Sprintf("%d", v.Num) {
+				return false
+			}
+		default:
+			return false
 		}
 	}
 	return true
+}
+
+func matchExpectedPayload(expect *psl.Packet, got []byte, payloadOffset int) bool {
+	if expect == nil || expect.Payload == nil {
+		return true
+	}
+	if payloadOffset < 0 || payloadOffset > len(got) {
+		return false
+	}
+	expected := []byte(expect.Payload.Raw)
+	actual := got[payloadOffset:]
+	return bytes.Equal(actual, expected)
 }
 
 type packetView struct {
@@ -996,4 +1281,15 @@ func formatIPv4(b []byte) string {
 		return ""
 	}
 	return fmt.Sprintf("%d.%d.%d.%d", b[0], b[1], b[2], b[3])
+}
+
+func formatIPv6(b []byte) string {
+	if len(b) < 16 {
+		return ""
+	}
+	parts := make([]string, 8)
+	for i := 0; i < 8; i++ {
+		parts[i] = fmt.Sprintf("%x", binary.BigEndian.Uint16(b[i*2:i*2+2]))
+	}
+	return strings.Join(parts, ":")
 }
