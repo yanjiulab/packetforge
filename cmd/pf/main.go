@@ -5,8 +5,10 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"net"
 	"os"
 	"runtime"
+	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -156,6 +158,7 @@ func newRootCmd() *cobra.Command {
 	flags.String("recv-bpf", "", "tcpdump-style BPF filter for recv (e.g. icmp, tcp port 80); Linux uses libpcap when set")
 	flags.BoolP("builtin-proto", "b", true, "Load built-in common protocols first (eth/vlan/arp/arp_request/arp_reply/ip/ipv6/icmp/icmp6/ndp_ns/ndp_na/udp/tcp)")
 	flags.Int64("seed", 0, "Random seed for built-in random functions (0 means auto)")
+	_ = rootCmd.RegisterFlagCompletionFunc("iface", completeIfaceNames)
 
 	_ = viper.BindPFlag("proto", flags.Lookup("proto"))
 	_ = viper.BindPFlag("stream", flags.Lookup("stream"))
@@ -175,6 +178,22 @@ func newRootCmd() *cobra.Command {
 	rootCmd.AddCommand(newGenCmd())
 
 	return rootCmd
+}
+
+func completeIfaceNames(_ *cobra.Command, _ []string, _ string) ([]string, cobra.ShellCompDirective) {
+	ifaces, err := net.Interfaces()
+	if err != nil {
+		return nil, cobra.ShellCompDirectiveNoFileComp
+	}
+	names := make([]string, 0, len(ifaces))
+	for _, ifc := range ifaces {
+		if ifc.Name == "" {
+			continue
+		}
+		names = append(names, ifc.Name)
+	}
+	sort.Strings(names)
+	return names, cobra.ShellCompDirectiveNoFileComp
 }
 
 func newBuiltinCmd() *cobra.Command {
@@ -412,6 +431,7 @@ func newFuzzCmd() *cobra.Command {
 	cmd.Flags().BoolVarP(&builtinProto, "builtin-proto", "b", true, "Load built-in common protocols first")
 	cmd.Flags().Int64Var(&seed, "seed", 0, "Random seed for built-in random functions (0 means auto)")
 	cmd.Flags().IntVar(&maxCases, "max-cases", 0, "Maximum fuzz cases per statement (0 means no limit)")
+	_ = cmd.RegisterFlagCompletionFunc("iface", completeIfaceNames)
 	return cmd
 }
 
