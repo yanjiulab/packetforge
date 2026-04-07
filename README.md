@@ -44,6 +44,7 @@ Common flags:
 - `-p, --proto` PDL directory (default `proto`)
 - `-i, --iface` interface (default `lo`)
 - `-d, --dry-run` parse/build only
+- `--l3-udp` send via UDP socket using packet `ip/udp/payload`; optional `eth` header is ignored when present
 - `-r, --recv` start receiving before sending and print received packet hex
 - `--recv-match-only` with `-r`, only print hex for packets matched by `@expect`
 - `--recv-view` recv output view: `packetview|hex|both` (default `hex`)

@@ -11,6 +11,7 @@ import (
 	"os"
 	"runtime"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -197,6 +198,7 @@ func newRootCmd() *cobra.Command {
 				viper.GetBool("c-literal"),
 				viper.GetBool("cpp-literal"),
 				viper.GetBool("builtin-proto"),
+				viper.GetBool("l3-udp"),
 				viper.GetBool("recv"),
 				viper.GetBool("recv-match-only"),
 				viper.GetString("recv-view"),
@@ -220,6 +222,7 @@ func newRootCmd() *cobra.Command {
 	flags.Bool("go-literal", false, "Print each packet as Go []byte literal and do not send")
 	flags.Bool("c-literal", false, "Print each packet as C static const unsigned char[] literal and do not send")
 	flags.Bool("cpp-literal", false, "Print each packet as C++ std::array<unsigned char,N> literal and do not send")
+	flags.Bool("l3-udp", false, "Send via UDP socket using packet's ip/udp fields; ignore optional eth header if present")
 	flags.BoolP("recv", "r", false, "Start receiving packets before sending and print received hex dump")
 	flags.Bool("recv-match-only", false, "With -r, only print hex dump for packets matched by @expect")
 	flags.String("recv-view", "hex", "Receive output view: packetview|hex|both")
@@ -238,6 +241,7 @@ func newRootCmd() *cobra.Command {
 	_ = viper.BindPFlag("go-literal", flags.Lookup("go-literal"))
 	_ = viper.BindPFlag("c-literal", flags.Lookup("c-literal"))
 	_ = viper.BindPFlag("cpp-literal", flags.Lookup("cpp-literal"))
+	_ = viper.BindPFlag("l3-udp", flags.Lookup("l3-udp"))
 	_ = viper.BindPFlag("recv", flags.Lookup("recv"))
 	_ = viper.BindPFlag("recv-match-only", flags.Lookup("recv-match-only"))
 	_ = viper.BindPFlag("recv-view", flags.Lookup("recv-view"))
@@ -637,7 +641,7 @@ func applyFuzzValue(pkt *psl.Packet, path string, val uint64) error {
 	return fmt.Errorf("layer %q not found", layerName)
 }
 
-func run(pslFile, pdlDir, iface string, dryRun bool, goLiteral, cLiteral, cppLiteral bool, builtinProto bool, recv bool, recvMatchOnly bool, recvView string, expectMatchMode string, recvWait time.Duration, recvCount int, recvBpf string, recvWaitExplicit bool) error {
+func run(pslFile, pdlDir, iface string, dryRun bool, goLiteral, cLiteral, cppLiteral bool, builtinProto bool, l3UDP bool, recv bool, recvMatchOnly bool, recvView string, expectMatchMode string, recvWait time.Duration, recvCount int, recvBpf string, recvWaitExplicit bool) error {
 	literalCount := 0
 	if goLiteral {
 		literalCount++
@@ -830,19 +834,34 @@ func run(pslFile, pdlDir, iface string, dryRun bool, goLiteral, cLiteral, cppLit
 	}
 
 	if !effectiveDryRun {
-		sender, err := packet.NewSender(iface)
-		if err != nil {
-			return fmt.Errorf("create sender: %w", err)
-		}
-		defer sender.Close()
-		sendRaw := sender.Send
-		if recv {
-			sendFn = func(data []byte) error {
-				fmt.Printf("[send] %d bytes:\n%s\n", len(data), FormatTCPDump(data, 0))
-				return sendRaw(data)
+		if l3UDP {
+			sendL3 := func(data []byte) error {
+				return sendL3UDPFromPacket(data)
+			}
+			if recv {
+				sendFn = func(data []byte) error {
+					wire := l3UDPWireBytes(data)
+					fmt.Printf("[send-l3-udp] %d bytes (ip+udp+payload):\n%s\n", len(wire), FormatTCPDump(wire, 0))
+					return sendL3(data)
+				}
+			} else {
+				sendFn = sendL3
 			}
 		} else {
-			sendFn = sendRaw
+			sender, err := packet.NewSender(iface)
+			if err != nil {
+				return fmt.Errorf("create sender: %w", err)
+			}
+			defer sender.Close()
+			sendRaw := sender.Send
+			if recv {
+				sendFn = func(data []byte) error {
+					fmt.Printf("[send] %d bytes:\n%s\n", len(data), FormatTCPDump(data, 0))
+					return sendRaw(data)
+				}
+			} else {
+				sendFn = sendRaw
+			}
 		}
 	}
 
@@ -1158,6 +1177,59 @@ func matchLayerKV(expect map[string]psl.Value, actual map[string]string) bool {
 	return true
 }
 
+func sendL3UDPFromPacket(data []byte) error {
+	ipOff := 0
+	if len(data) >= 14 && (data[14]>>4) == 4 {
+		ipOff = 14 // ignore optional ethernet header
+	}
+	if len(data) < ipOff+20 {
+		return fmt.Errorf("--l3-udp: packet too short for ipv4 header")
+	}
+	if (data[ipOff] >> 4) != 4 {
+		return fmt.Errorf("--l3-udp: only ipv4 packets are supported")
+	}
+	ihl := int(data[ipOff]&0x0f) * 4
+	if ihl < 20 || len(data) < ipOff+ihl+8 {
+		return fmt.Errorf("--l3-udp: invalid ipv4 header length")
+	}
+	proto := data[ipOff+9]
+	if proto != 17 {
+		return fmt.Errorf("--l3-udp: only udp packets are supported")
+	}
+	srcIP := net.IPv4(data[ipOff+12], data[ipOff+13], data[ipOff+14], data[ipOff+15])
+	dstIP := net.IPv4(data[ipOff+16], data[ipOff+17], data[ipOff+18], data[ipOff+19])
+	udpOff := ipOff + ihl
+	sport := int(binary.BigEndian.Uint16(data[udpOff : udpOff+2]))
+	dport := int(binary.BigEndian.Uint16(data[udpOff+2 : udpOff+4]))
+	if dport <= 0 {
+		return fmt.Errorf("--l3-udp: invalid destination port")
+	}
+	payload := data[udpOff+8:]
+
+	laddr := &net.UDPAddr{IP: srcIP, Port: sport}
+	raddr := &net.UDPAddr{IP: dstIP, Port: dport}
+	conn, err := net.DialUDP("udp4", laddr, raddr)
+	if err != nil {
+		return fmt.Errorf("--l3-udp: dial udp: %w", err)
+	}
+	defer conn.Close()
+	if _, err := conn.Write(payload); err != nil {
+		return fmt.Errorf("--l3-udp: send udp payload: %w", err)
+	}
+	return nil
+}
+
+func l3UDPWireBytes(data []byte) []byte {
+	ipOff := 0
+	if len(data) >= 14 && (data[14]>>4) == 4 {
+		ipOff = 14
+	}
+	if ipOff >= len(data) {
+		return data
+	}
+	return append([]byte(nil), data[ipOff:]...)
+}
+
 func matchExpectedPayload(expect *psl.Packet, got []byte, payloadOffset int) bool {
 	if expect == nil || expect.Payload == nil {
 		return true
@@ -1236,7 +1308,7 @@ func packetViewText(data []byte) string {
 	var lines []string
 	lines = append(lines, fmt.Sprintf("  len=%d", len(data)))
 	if v.present["eth"] {
-		lines = append(lines, fmt.Sprintf("  eth: src=%s dst=%s type=%s", v.fields["eth.src"], v.fields["eth.dst"], v.fields["eth.type"]))
+		lines = append(lines, fmt.Sprintf("  eth: src=%s dst=%s type=%s", v.fields["eth.src"], v.fields["eth.dst"], formatEthType(v.fields["eth.type"])))
 	}
 	if v.present["ip"] {
 		lines = append(lines, fmt.Sprintf("  ip: src=%s dst=%s id=%s ttl=%s protocol=%s", v.fields["ip.src"], v.fields["ip.dst"], v.fields["ip.id"], v.fields["ip.ttl"], v.fields["ip.protocol"]))
@@ -1292,4 +1364,12 @@ func formatIPv6(b []byte) string {
 		parts[i] = fmt.Sprintf("%x", binary.BigEndian.Uint16(b[i*2:i*2+2]))
 	}
 	return strings.Join(parts, ":")
+}
+
+func formatEthType(s string) string {
+	n, err := strconv.ParseUint(s, 10, 16)
+	if err != nil {
+		return s
+	}
+	return fmt.Sprintf("0x%04x", uint16(n))
 }

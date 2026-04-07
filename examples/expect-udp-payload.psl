@@ -1,0 +1,16 @@
+// Local UDP payload expect demo.
+// Send UDP "ping" to 127.0.0.1:6000, then expect a UDP reply with payload "ping".
+//
+// Run (terminal A):
+//   socat -u UDP4-RECVFROM:6000,reuseaddr,fork UDP4-SENDTO:127.0.0.1:5000
+//
+// Run (terminal B, require root/CAP_NET_RAW):
+//   sudo ./pf -s examples/expect-udp-payload.psl -i lo -r --expect-match-mode subset --recv-match-only --recv-view packetview --recv-bpf "udp and (port 5000 or port 6000)"
+
+[
+  ip(src=127.0.0.1, dst=127.0.0.1, id=1)
+  udp(sport=5000, dport=6000)
+  `ping`
+]
+@expect [ eth() ip() udp(dport=5000) `ping` ]
+@expect_timeout 5s
