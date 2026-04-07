@@ -2,6 +2,8 @@
 package main
 
 import (
+	"bytes"
+	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -196,6 +198,9 @@ func newRootCmd() *cobra.Command {
 				viper.GetBool("cpp-literal"),
 				viper.GetBool("builtin-proto"),
 				viper.GetBool("recv"),
+				viper.GetBool("recv-match-only"),
+				viper.GetString("recv-view"),
+				viper.GetString("expect-match-mode"),
 				viper.GetDuration("recv-wait"),
 				viper.GetInt("recv-count"),
 				viper.GetString("recv-bpf"),
@@ -216,6 +221,9 @@ func newRootCmd() *cobra.Command {
 	flags.Bool("c-literal", false, "Print each packet as C static const unsigned char[] literal and do not send")
 	flags.Bool("cpp-literal", false, "Print each packet as C++ std::array<unsigned char,N> literal and do not send")
 	flags.BoolP("recv", "r", false, "Start receiving packets before sending and print received hex dump")
+	flags.Bool("recv-match-only", false, "With -r, only print hex dump for packets matched by @expect")
+	flags.String("recv-view", "hex", "Receive output view: packetview|hex|both")
+	flags.String("expect-match-mode", "exact", "Expect match mode: exact|subset")
 	flags.Duration("recv-wait", time.Second, "Wait duration for receiving packets after send completes (e.g. 500ms, 2s)")
 	flags.Int("recv-count", 0, "Stop receive when this many packets are captured (0 means unlimited)")
 	flags.String("recv-bpf", "", "tcpdump-style BPF filter for recv (e.g. icmp, tcp port 80); Linux uses libpcap when set")
@@ -231,6 +239,9 @@ func newRootCmd() *cobra.Command {
 	_ = viper.BindPFlag("c-literal", flags.Lookup("c-literal"))
 	_ = viper.BindPFlag("cpp-literal", flags.Lookup("cpp-literal"))
 	_ = viper.BindPFlag("recv", flags.Lookup("recv"))
+	_ = viper.BindPFlag("recv-match-only", flags.Lookup("recv-match-only"))
+	_ = viper.BindPFlag("recv-view", flags.Lookup("recv-view"))
+	_ = viper.BindPFlag("expect-match-mode", flags.Lookup("expect-match-mode"))
 	_ = viper.BindPFlag("recv-wait", flags.Lookup("recv-wait"))
 	_ = viper.BindPFlag("recv-count", flags.Lookup("recv-count"))
 	_ = viper.BindPFlag("recv-bpf", flags.Lookup("recv-bpf"))
@@ -626,7 +637,7 @@ func applyFuzzValue(pkt *psl.Packet, path string, val uint64) error {
 	return fmt.Errorf("layer %q not found", layerName)
 }
 
-func run(pslFile, pdlDir, iface string, dryRun bool, goLiteral, cLiteral, cppLiteral bool, builtinProto bool, recv bool, recvWait time.Duration, recvCount int, recvBpf string, recvWaitExplicit bool) error {
+func run(pslFile, pdlDir, iface string, dryRun bool, goLiteral, cLiteral, cppLiteral bool, builtinProto bool, recv bool, recvMatchOnly bool, recvView string, expectMatchMode string, recvWait time.Duration, recvCount int, recvBpf string, recvWaitExplicit bool) error {
 	literalCount := 0
 	if goLiteral {
 		literalCount++
@@ -685,6 +696,12 @@ func run(pslFile, pdlDir, iface string, dryRun bool, goLiteral, cLiteral, cppLit
 	if recvCount < 0 {
 		return fmt.Errorf("--recv-count must be >= 0")
 	}
+	if !strings.EqualFold(recvView, "hex") && !strings.EqualFold(recvView, "packetview") && !strings.EqualFold(recvView, "both") {
+		return fmt.Errorf("--recv-view must be one of: packetview, hex, both")
+	}
+	if !strings.EqualFold(expectMatchMode, "exact") && !strings.EqualFold(expectMatchMode, "subset") {
+		return fmt.Errorf("--expect-match-mode must be one of: exact, subset")
+	}
 
 	if recv {
 		sendFn = func(data []byte) error {
@@ -712,6 +729,7 @@ func run(pslFile, pdlDir, iface string, dryRun bool, goLiteral, cLiteral, cppLit
 		recvWG         sync.WaitGroup
 		recvDone       chan struct{}
 		receiver       *packet.Receiver
+		recvFrames     chan []byte
 		sendPhaseEnded atomic.Bool
 		drainOnce      sync.Once
 		drainDone      chan struct{}
@@ -725,6 +743,7 @@ func run(pslFile, pdlDir, iface string, dryRun bool, goLiteral, cLiteral, cppLit
 			return fmt.Errorf("create receiver: %w", err)
 		}
 		recvDone = make(chan struct{})
+		recvFrames = make(chan []byte, 1024)
 		recvWG.Add(1)
 		go func() {
 			defer recvWG.Done()
@@ -746,7 +765,13 @@ func run(pslFile, pdlDir, iface string, dryRun bool, goLiteral, cLiteral, cppLit
 						return
 					}
 				}
-				fmt.Printf("[recv] %d bytes:\n%s\n", len(data), FormatTCPDump(data, 0))
+				if !recvMatchOnly {
+					printRecvFrame(data, recvView, "recv")
+				}
+				select {
+				case recvFrames <- append([]byte(nil), data...):
+				default:
+				}
 				if !sendPhaseEnded.Load() {
 					continue
 				}
@@ -756,6 +781,44 @@ func run(pslFile, pdlDir, iface string, dryRun bool, goLiteral, cLiteral, cppLit
 				}
 			}
 		}()
+	}
+
+	var expectFn engine.ExpectFn
+	if !effectiveDryRun {
+		expectFn = func(expect *psl.Packet, opts *packet.BuildOptions, timeout time.Duration) error {
+			if recvFrames == nil {
+				return fmt.Errorf("@expect requires -r/--recv in non-dry-run mode")
+			}
+			expectBytes, err := builder.Build(expect, &packet.BuildOptions{RepeatIndex: opts.RepeatIndex})
+			if err != nil {
+				return fmt.Errorf("build @expect packet: %w", err)
+			}
+			fmt.Printf("[expect] waiting up to %s for expected packet (%s mode)\n", timeout, strings.ToLower(expectMatchMode))
+			timer := time.NewTimer(timeout)
+			defer timer.Stop()
+			seen := 0
+			for {
+				select {
+				case <-timer.C:
+					return fmt.Errorf("@expect timeout after %s (checked %d received packets)", timeout, seen)
+				case got := <-recvFrames:
+					seen++
+					matched := false
+					if strings.EqualFold(expectMatchMode, "subset") {
+						matched = matchExpectSubset(expect, got)
+					} else {
+						matched = bytes.Equal(got, expectBytes)
+					}
+					if matched {
+						fmt.Printf("[expect] matched after checking %d received packets\n", seen)
+						if recvMatchOnly {
+							printRecvFrame(got, recvView, "recv-matched")
+						}
+						return nil
+					}
+				}
+			}
+		}
 	}
 
 	if !effectiveDryRun {
@@ -775,7 +838,7 @@ func run(pslFile, pdlDir, iface string, dryRun bool, goLiteral, cLiteral, cppLit
 		}
 	}
 
-	runErr := engine.Run(script, builder, sendFn)
+	runErr := engine.Run(script, builder, sendFn, expectFn)
 	if recv && !effectiveDryRun {
 		sendPhaseEnded.Store(true)
 		// recv-count: wait until N drain-phase packets unless user set --recv-wait (then cap by time).
@@ -800,4 +863,137 @@ func run(pslFile, pdlDir, iface string, dryRun bool, goLiteral, cLiteral, cppLit
 		return fmt.Errorf("run: %w", runErr)
 	}
 	return nil
+}
+
+func matchExpectSubset(expect *psl.Packet, got []byte) bool {
+	view, ok := parsePacketView(got)
+	if !ok || expect == nil {
+		return false
+	}
+	for _, l := range expect.Layers {
+		layer := strings.ToLower(l.Proto)
+		if !view.present[layer] {
+			return false
+		}
+		for k, v := range l.KV {
+			key := layer + "." + strings.ToLower(k)
+			if !matchExpectedField(view.fields, key, v) {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+type packetView struct {
+	present map[string]bool
+	fields  map[string]string
+}
+
+func parsePacketView(buf []byte) (packetView, bool) {
+	v := packetView{present: map[string]bool{}, fields: map[string]string{}}
+	if len(buf) < 14 {
+		return v, false
+	}
+	v.present["eth"] = true
+	v.fields["eth.dst"] = formatMAC(buf[0:6])
+	v.fields["eth.src"] = formatMAC(buf[6:12])
+	ethType := binary.BigEndian.Uint16(buf[12:14])
+	v.fields["eth.type"] = fmt.Sprintf("%d", ethType)
+	off := 14
+	if ethType == 0x0800 {
+		if len(buf) < off+20 {
+			return v, true
+		}
+		v.present["ip"] = true
+		ihl := int(buf[off]&0x0f) * 4
+		if ihl < 20 || len(buf) < off+ihl {
+			return v, true
+		}
+		v.fields["ip.src"] = formatIPv4(buf[off+12 : off+16])
+		v.fields["ip.dst"] = formatIPv4(buf[off+16 : off+20])
+		v.fields["ip.id"] = fmt.Sprintf("%d", binary.BigEndian.Uint16(buf[off+4:off+6]))
+		v.fields["ip.ttl"] = fmt.Sprintf("%d", buf[off+8])
+		proto := buf[off+9]
+		v.fields["ip.protocol"] = fmt.Sprintf("%d", proto)
+		off += ihl
+		if proto == 17 && len(buf) >= off+8 {
+			v.present["udp"] = true
+			v.fields["udp.sport"] = fmt.Sprintf("%d", binary.BigEndian.Uint16(buf[off:off+2]))
+			v.fields["udp.dport"] = fmt.Sprintf("%d", binary.BigEndian.Uint16(buf[off+2:off+4]))
+		}
+		if proto == 6 && len(buf) >= off+20 {
+			v.present["tcp"] = true
+			v.fields["tcp.sport"] = fmt.Sprintf("%d", binary.BigEndian.Uint16(buf[off:off+2]))
+			v.fields["tcp.dport"] = fmt.Sprintf("%d", binary.BigEndian.Uint16(buf[off+2:off+4]))
+		}
+	}
+	return v, true
+}
+
+func printRecvFrame(data []byte, recvView, tag string) {
+	switch strings.ToLower(recvView) {
+	case "packetview":
+		fmt.Printf("[%s]\n%s\n", tag, packetViewText(data))
+	case "both":
+		fmt.Printf("[%s]\n%s\n", tag, packetViewText(data))
+		fmt.Printf("[%s] %d bytes:\n%s\n", tag, len(data), FormatTCPDump(data, 0))
+	default:
+		fmt.Printf("[%s] %d bytes:\n%s\n", tag, len(data), FormatTCPDump(data, 0))
+	}
+}
+
+func packetViewText(data []byte) string {
+	v, ok := parsePacketView(data)
+	if !ok {
+		return fmt.Sprintf("len=%d parse=fail", len(data))
+	}
+	var lines []string
+	lines = append(lines, fmt.Sprintf("  len=%d", len(data)))
+	if v.present["eth"] {
+		lines = append(lines, fmt.Sprintf("  eth: src=%s dst=%s type=%s", v.fields["eth.src"], v.fields["eth.dst"], v.fields["eth.type"]))
+	}
+	if v.present["ip"] {
+		lines = append(lines, fmt.Sprintf("  ip: src=%s dst=%s id=%s ttl=%s protocol=%s", v.fields["ip.src"], v.fields["ip.dst"], v.fields["ip.id"], v.fields["ip.ttl"], v.fields["ip.protocol"]))
+	}
+	if v.present["udp"] {
+		lines = append(lines, fmt.Sprintf("  udp: sport=%s dport=%s", v.fields["udp.sport"], v.fields["udp.dport"]))
+	}
+	if v.present["tcp"] {
+		lines = append(lines, fmt.Sprintf("  tcp: sport=%s dport=%s", v.fields["tcp.sport"], v.fields["tcp.dport"]))
+	}
+	return strings.Join(lines, "\n")
+}
+
+func matchExpectedField(fields map[string]string, key string, v psl.Value) bool {
+	got, ok := fields[key]
+	if !ok {
+		return false
+	}
+	switch v.Kind {
+	case psl.ValIP:
+		return strings.EqualFold(got, v.IP)
+	case psl.ValMAC:
+		return strings.EqualFold(got, strings.ToLower(v.MAC))
+	case psl.ValNumber:
+		return got == fmt.Sprintf("%d", v.Num)
+	case psl.ValString:
+		return got == v.Str
+	default:
+		return false
+	}
+}
+
+func formatMAC(b []byte) string {
+	if len(b) < 6 {
+		return ""
+	}
+	return fmt.Sprintf("%02x:%02x:%02x:%02x:%02x:%02x", b[0], b[1], b[2], b[3], b[4], b[5])
+}
+
+func formatIPv4(b []byte) string {
+	if len(b) < 4 {
+		return ""
+	}
+	return fmt.Sprintf("%d.%d.%d.%d", b[0], b[1], b[2], b[3])
 }

@@ -31,6 +31,8 @@ const (
 	TokInterval
 	TokExit
 	TokIgnore
+	TokExpect
+	TokExpectTimeout
 	TokFuzz
 	TokComment
 	TokUnit   // ns, us, ms, s
@@ -181,6 +183,12 @@ func (l *Lexer) lexAt(line, col int) Token {
 	}
 	if raw == "@exit" {
 		return Token{Kind: TokExit, Raw: raw, Line: line, Col: col}
+	}
+	if raw == "@expect" {
+		return Token{Kind: TokExpect, Raw: raw, Line: line, Col: col}
+	}
+	if raw == "@expect_timeout" {
+		return Token{Kind: TokExpectTimeout, Raw: raw, Line: line, Col: col}
 	}
 	if raw == "@fuzz" {
 		return Token{Kind: TokFuzz, Raw: raw, Line: line, Col: col}

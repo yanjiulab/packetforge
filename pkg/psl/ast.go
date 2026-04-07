@@ -17,6 +17,8 @@ type PacketStmt struct {
 	Interval  Dur  // Transmission interval
 	Ignore    bool // Skip this packet statement during execution
 	Exit      bool // Exit script after this packet statement finishes
+	Expect    *Packet
+	ExpectTimeout Dur
 	FuzzRules []FuzzRule
 	FuzzCount int // 0 means auto based on rules
 }

@@ -105,12 +105,18 @@ func (p *Parser) parseAsyncBlock() (Stmt, error) {
 	if err != nil {
 		return nil, err
 	}
-	repeat, interval, _, _, exitAfter, ignore, err := p.parseModifiers()
+	repeat, interval, _, _, exitAfter, ignore, expect, expectTimeout, err := p.parseModifiers()
 	if err != nil {
 		return nil, err
 	}
 	if exitAfter {
 		return nil, fmt.Errorf("@exit is only allowed for packet statements at %d:%d", p.tok.Line, p.tok.Col)
+	}
+	if expect != nil {
+		return nil, fmt.Errorf("@expect is only allowed for packet statements at %d:%d", p.tok.Line, p.tok.Col)
+	}
+	if expectTimeout.Nanoseconds() > 0 {
+		return nil, fmt.Errorf("@expect_timeout is only allowed for packet statements at %d:%d", p.tok.Line, p.tok.Col)
 	}
 	block.Repeat = repeat
 	block.Interval = interval
@@ -125,12 +131,18 @@ func (p *Parser) parseBlock() (Stmt, error) {
 	if err != nil {
 		return nil, err
 	}
-	repeat, interval, _, _, exitAfter, ignore, err := p.parseModifiers()
+	repeat, interval, _, _, exitAfter, ignore, expect, expectTimeout, err := p.parseModifiers()
 	if err != nil {
 		return nil, err
 	}
 	if exitAfter {
 		return nil, fmt.Errorf("@exit is only allowed for packet statements at %d:%d", p.tok.Line, p.tok.Col)
+	}
+	if expect != nil {
+		return nil, fmt.Errorf("@expect is only allowed for packet statements at %d:%d", p.tok.Line, p.tok.Col)
+	}
+	if expectTimeout.Nanoseconds() > 0 {
+		return nil, fmt.Errorf("@expect_timeout is only allowed for packet statements at %d:%d", p.tok.Line, p.tok.Col)
 	}
 	block.Repeat = repeat
 	block.Interval = interval
@@ -158,7 +170,7 @@ func (p *Parser) parseBlockContent() (*BlockStmt, error) {
 }
 
 // parseModifiers parses optional @repeat / @interval, can be multi-line
-func (p *Parser) parseModifiers() (repeat int, interval Dur, fuzzRules []FuzzRule, fuzzCount int, exitAfter bool, ignore bool, err error) {
+func (p *Parser) parseModifiers() (repeat int, interval Dur, fuzzRules []FuzzRule, fuzzCount int, exitAfter bool, ignore bool, expect *Packet, expectTimeout Dur, err error) {
 	repeat = 0
 	fuzzCount = 0
 	for {
@@ -201,13 +213,13 @@ func (p *Parser) parseModifiers() (repeat int, interval Dur, fuzzRules []FuzzRul
 		}
 		if p.at(TokFuzz) {
 			if !p.allowFuzz {
-				return 0, Dur{}, nil, 0, false, false, fmt.Errorf("@fuzz is only supported in pf fuzz mode at %d:%d", p.tok.Line, p.tok.Col)
+				return 0, Dur{}, nil, 0, false, false, nil, Dur{}, fmt.Errorf("@fuzz is only supported in pf fuzz mode at %d:%d", p.tok.Line, p.tok.Col)
 			}
 			p.advance()
 			if p.at(TokIdent) && strings.EqualFold(p.tok.Raw, "count") {
 				p.advance()
 				if !p.at(TokNumber) {
-					return 0, Dur{}, nil, 0, false, false, fmt.Errorf("expected fuzz count number at %d:%d", p.tok.Line, p.tok.Col)
+					return 0, Dur{}, nil, 0, false, false, nil, Dur{}, fmt.Errorf("expected fuzz count number at %d:%d", p.tok.Line, p.tok.Col)
 				}
 				n, _ := strconv.Atoi(p.tok.Raw)
 				fuzzCount = n
@@ -216,13 +228,34 @@ func (p *Parser) parseModifiers() (repeat int, interval Dur, fuzzRules []FuzzRul
 			}
 			layer, field, e := p.parseFuzzPath()
 			if e != nil {
-				return 0, Dur{}, nil, 0, false, false, e
+				return 0, Dur{}, nil, 0, false, false, nil, Dur{}, e
 			}
 			mode, args, e := p.parseFuzzStrategy()
 			if e != nil {
-				return 0, Dur{}, nil, 0, false, false, e
+				return 0, Dur{}, nil, 0, false, false, nil, Dur{}, e
 			}
 			fuzzRules = append(fuzzRules, FuzzRule{Layer: layer, Field: field, Mode: mode, Args: args})
+			continue
+		}
+		if p.at(TokExpect) {
+			p.advance()
+			pkt, e := p.parsePacket()
+			if e != nil {
+				return 0, Dur{}, nil, 0, false, false, nil, Dur{}, e
+			}
+			if pkt == nil {
+				return 0, Dur{}, nil, 0, false, false, nil, Dur{}, fmt.Errorf("expected packet after @expect at %d:%d", p.tok.Line, p.tok.Col)
+			}
+			expect = pkt
+			continue
+		}
+		if p.at(TokExpectTimeout) {
+			p.advance()
+			dur, e := p.parseDurationValue()
+			if e != nil {
+				return 0, Dur{}, nil, 0, false, false, nil, Dur{}, e
+			}
+			expectTimeout = dur
 			continue
 		}
 		if p.at(TokExit) {
@@ -232,7 +265,7 @@ func (p *Parser) parseModifiers() (repeat int, interval Dur, fuzzRules []FuzzRul
 		}
 		if p.at(TokIgnore) {
 			if strings.TrimSpace(p.tok.Raw) != "" {
-				return 0, Dur{}, nil, 0, false, false, fmt.Errorf("@ignore does not take arguments at %d:%d", p.tok.Line, p.tok.Col)
+				return 0, Dur{}, nil, 0, false, false, nil, Dur{}, fmt.Errorf("@ignore does not take arguments at %d:%d", p.tok.Line, p.tok.Col)
 			}
 			p.advance()
 			ignore = true
@@ -244,7 +277,7 @@ func (p *Parser) parseModifiers() (repeat int, interval Dur, fuzzRules []FuzzRul
 		}
 		break
 	}
-	return repeat, interval, fuzzRules, fuzzCount, exitAfter, ignore, nil
+	return repeat, interval, fuzzRules, fuzzCount, exitAfter, ignore, expect, expectTimeout, nil
 }
 
 // parsePacketStmt ::= Packet Modifiers?  (returns nil when no packet, does not consume modifiers)
@@ -256,11 +289,38 @@ func (p *Parser) parsePacketStmt() (Stmt, error) {
 	if packet == nil {
 		return nil, nil
 	}
-	repeat, interval, fuzzRules, fuzzCount, exitAfter, ignore, err := p.parseModifiers()
+	repeat, interval, fuzzRules, fuzzCount, exitAfter, ignore, expect, expectTimeout, err := p.parseModifiers()
 	if err != nil {
 		return nil, err
 	}
-	return &PacketStmt{Packet: packet, Repeat: repeat, Interval: interval, Ignore: ignore, Exit: exitAfter, FuzzRules: fuzzRules, FuzzCount: fuzzCount}, nil
+	return &PacketStmt{Packet: packet, Repeat: repeat, Interval: interval, Ignore: ignore, Exit: exitAfter, Expect: expect, ExpectTimeout: expectTimeout, FuzzRules: fuzzRules, FuzzCount: fuzzCount}, nil
+}
+
+func (p *Parser) parseDurationValue() (Dur, error) {
+	if !p.at(TokNumber) {
+		return Dur{}, fmt.Errorf("expected duration number at %d:%d", p.tok.Line, p.tok.Col)
+	}
+	n, _ := strconv.ParseUint(p.tok.Raw, 10, 64)
+	p.advance()
+	unit := "ms"
+	if p.at(TokIdent) {
+		unit = strings.ToLower(p.tok.Raw)
+		p.advance()
+	}
+	var d Dur
+	switch unit {
+	case "ns":
+		d.Ns = n
+	case "us":
+		d.Us = n
+	case "ms":
+		d.Ms = n
+	case "s":
+		d.Sec = n
+	default:
+		return Dur{}, fmt.Errorf("unsupported duration unit %q at %d:%d", unit, p.tok.Line, p.tok.Col)
+	}
+	return d, nil
 }
 
 func (p *Parser) parseFuzzPath() (string, string, error) {

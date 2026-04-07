@@ -45,9 +45,12 @@ Common flags:
 - `-i, --iface` interface (default `lo`)
 - `-d, --dry-run` parse/build only
 - `-r, --recv` start receiving before sending and print received packet hex
+- `--recv-match-only` with `-r`, only print hex for packets matched by `@expect`
+- `--recv-view` recv output view: `packetview|hex|both` (default `hex`)
 - `--recv-wait` drain wait after all sends when `--recv-count` is `0` (default `1s`). If `--recv-count` is set to a positive N, the default `1s` is **not** used as a cap: wait until N drain-phase packets, unless you explicitly set `--recv-wait` or `PF_RECV_WAIT` to limit total wait time
 - `--recv-count` in the drain phase only, stop after N received packets (default `0`, unlimited; send phase does not count toward the limit)
 - `--recv-bpf` tcpdump-style BPF filter for received packets (e.g. `icmp`, `tcp port 80`); on Linux, a filter requires a **CGO** build with **libpcap** (`CGO_ENABLED=1` and e.g. `libpcap-dev`); without CGO, omit `--recv-bpf` or rebuild with CGO
+- `--expect-match-mode` expect matching mode: `exact` (bytes equality) or `subset` (subset fields for common layers)
 - `-b, --builtin-proto` load builtin protocols
 - `--seed` random seed for `$rand*` builtins
 
@@ -133,6 +136,8 @@ Notes:
 - Flow control:
   - `@repeat N` / `@repeat forever`
   - `@interval 100ms|1s|...`
+  - `@expect [ ... ]` (packet stmt only; matching behavior depends on `--expect-match-mode`)
+  - `@expect_timeout 2s|500ms|...` (packet stmt only; default `1s`)
   - `@exit` (for packet stmt: exit script after this packet statement finishes)
   - `@ignore` (stmt modifier, place after packet/block like `@interval`; skip executing that packet/block)
   - `async { ... }`

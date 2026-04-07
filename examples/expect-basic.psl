@@ -1,0 +1,15 @@
+// Expect example:
+// - exact mode: bytes equality (default): --expect-match-mode exact
+// - subset mode: match only declared fields in common layers (eth/ip/udp/tcp)
+// Note: this requires runtime receive enabled: pf -r ...
+
+[
+  eth()
+  ip(src=127.0.0.1, dst=127.0.0.2, id=1)
+  udp(sport=5000, dport=6000)
+  `ping`
+]
+@expect [
+  ip(src=127.0.0.1, dst=127.0.0.1)
+]
+@expect_timeout 20s

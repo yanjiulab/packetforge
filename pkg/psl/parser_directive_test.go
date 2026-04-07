@@ -63,3 +63,22 @@ func TestParseExitDirectiveForPacket(t *testing.T) {
 		t.Fatalf("expected packet exit modifier to be true")
 	}
 }
+
+func TestParseExpectDirectiveForPacket(t *testing.T) {
+	src := `
+[ ip(src=10.0.0.1, dst=10.0.0.2, id=1) ]
+@expect [ ip(src=10.0.0.2, dst=10.0.0.1, id=1) ]
+@expect_timeout 1500ms
+`
+	script, err := NewParser(src).ParseScript()
+	if err != nil {
+		t.Fatalf("ParseScript: %v", err)
+	}
+	ps := script.Stmts[0].(*PacketStmt)
+	if ps.Expect == nil {
+		t.Fatalf("expected @expect packet")
+	}
+	if ps.ExpectTimeout.Ms != 1500 {
+		t.Fatalf("expected timeout 1500ms, got %+v", ps.ExpectTimeout)
+	}
+}
