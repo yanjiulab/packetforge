@@ -91,6 +91,63 @@ func FormatTCPDump(buf []byte, startOffset int) string {
 	return dumpBuilder.String()
 }
 
+// FormatGoBytesLiteral converts binary buffer to copyable Go []byte literal.
+func FormatGoBytesLiteral(buf []byte) string {
+	if len(buf) == 0 {
+		return "[]byte{}"
+	}
+	var b strings.Builder
+	b.WriteString("[]byte{")
+	for i, v := range buf {
+		if i%12 == 0 {
+			b.WriteString("\n\t")
+		} else {
+			b.WriteString(" ")
+		}
+		fmt.Fprintf(&b, "0x%02x,", v)
+	}
+	b.WriteString("\n}")
+	return b.String()
+}
+
+// FormatCBytesLiteral converts binary buffer to copyable C unsigned char array initializer.
+func FormatCBytesLiteral(buf []byte) string {
+	if len(buf) == 0 {
+		return "static const unsigned char pkt[] = { };"
+	}
+	var b strings.Builder
+	b.WriteString("static const unsigned char pkt[] = {")
+	for i, v := range buf {
+		if i%12 == 0 {
+			b.WriteString("\n\t")
+		} else {
+			b.WriteString(" ")
+		}
+		fmt.Fprintf(&b, "0x%02x,", v)
+	}
+	b.WriteString("\n};")
+	return b.String()
+}
+
+// FormatCppBytesLiteral converts binary buffer to copyable C++ std::array literal (requires <array>).
+func FormatCppBytesLiteral(buf []byte) string {
+	if len(buf) == 0 {
+		return "static const std::array<unsigned char, 0> pkt{{}};"
+	}
+	var b strings.Builder
+	fmt.Fprintf(&b, "static const std::array<unsigned char, %d> pkt{{", len(buf))
+	for i, v := range buf {
+		if i%12 == 0 {
+			b.WriteString("\n\t")
+		} else {
+			b.WriteString(" ")
+		}
+		fmt.Fprintf(&b, "0x%02x,", v)
+	}
+	b.WriteString("\n}};")
+	return b.String()
+}
+
 var (
 	Version = "dev"
 	Commit  = "none"
@@ -134,6 +191,9 @@ func newRootCmd() *cobra.Command {
 				viper.GetString("proto"),
 				viper.GetString("iface"),
 				viper.GetBool("dry-run"),
+				viper.GetBool("go-literal"),
+				viper.GetBool("c-literal"),
+				viper.GetBool("cpp-literal"),
 				viper.GetBool("builtin-proto"),
 				viper.GetBool("recv"),
 				viper.GetDuration("recv-wait"),
@@ -152,6 +212,9 @@ func newRootCmd() *cobra.Command {
 	flags.StringP("stream", "s", "", "Packet stream language file (required)")
 	flags.StringP("iface", "i", "lo", "Network interface to send packets (e.g. eth0, lo)")
 	flags.BoolP("dry-run", "d", false, "Parse and build packets only, do not actually send")
+	flags.Bool("go-literal", false, "Print each packet as Go []byte literal and do not send")
+	flags.Bool("c-literal", false, "Print each packet as C static const unsigned char[] literal and do not send")
+	flags.Bool("cpp-literal", false, "Print each packet as C++ std::array<unsigned char,N> literal and do not send")
 	flags.BoolP("recv", "r", false, "Start receiving packets before sending and print received hex dump")
 	flags.Duration("recv-wait", time.Second, "Wait duration for receiving packets after send completes (e.g. 500ms, 2s)")
 	flags.Int("recv-count", 0, "Stop receive when this many packets are captured (0 means unlimited)")
@@ -164,6 +227,9 @@ func newRootCmd() *cobra.Command {
 	_ = viper.BindPFlag("stream", flags.Lookup("stream"))
 	_ = viper.BindPFlag("iface", flags.Lookup("iface"))
 	_ = viper.BindPFlag("dry-run", flags.Lookup("dry-run"))
+	_ = viper.BindPFlag("go-literal", flags.Lookup("go-literal"))
+	_ = viper.BindPFlag("c-literal", flags.Lookup("c-literal"))
+	_ = viper.BindPFlag("cpp-literal", flags.Lookup("cpp-literal"))
 	_ = viper.BindPFlag("recv", flags.Lookup("recv"))
 	_ = viper.BindPFlag("recv-wait", flags.Lookup("recv-wait"))
 	_ = viper.BindPFlag("recv-count", flags.Lookup("recv-count"))
@@ -560,7 +626,21 @@ func applyFuzzValue(pkt *psl.Packet, path string, val uint64) error {
 	return fmt.Errorf("layer %q not found", layerName)
 }
 
-func run(pslFile, pdlDir, iface string, dryRun bool, builtinProto bool, recv bool, recvWait time.Duration, recvCount int, recvBpf string, recvWaitExplicit bool) error {
+func run(pslFile, pdlDir, iface string, dryRun bool, goLiteral, cLiteral, cppLiteral bool, builtinProto bool, recv bool, recvWait time.Duration, recvCount int, recvBpf string, recvWaitExplicit bool) error {
+	literalCount := 0
+	if goLiteral {
+		literalCount++
+	}
+	if cLiteral {
+		literalCount++
+	}
+	if cppLiteral {
+		literalCount++
+	}
+	if literalCount > 1 {
+		return fmt.Errorf("at most one of --go-literal, --c-literal, --cpp-literal may be set")
+	}
+	effectiveDryRun := dryRun || goLiteral || cLiteral || cppLiteral
 	// 1. Load PDL protocols
 	reg, err := loadRegistry(pdlDir, builtinProto)
 	if err != nil {
@@ -584,11 +664,22 @@ func run(pslFile, pdlDir, iface string, dryRun bool, builtinProto bool, recv boo
 	}
 
 	sendFn := func(data []byte) error {
-		if dryRun {
+		switch {
+		case goLiteral:
+			fmt.Printf("[go-literal] packet bytes (%d):\n%s\n", len(data), FormatGoBytesLiteral(data))
+			return nil
+		case cLiteral:
+			fmt.Printf("[c-literal] packet bytes (%d):\n%s\n", len(data), FormatCBytesLiteral(data))
+			return nil
+		case cppLiteral:
+			fmt.Printf("[cpp-literal] packet bytes (%d):\n%s\n", len(data), FormatCppBytesLiteral(data))
+			return nil
+		case effectiveDryRun:
 			fmt.Printf("[dry-run] Send %d bytes:\n%s\n", len(data), FormatTCPDump(data, 0))
 			return nil
+		default:
+			return nil
 		}
-		return nil
 	}
 
 	if recvCount < 0 {
@@ -597,11 +688,23 @@ func run(pslFile, pdlDir, iface string, dryRun bool, builtinProto bool, recv boo
 
 	if recv {
 		sendFn = func(data []byte) error {
-			fmt.Printf("[send] %d bytes:\n%s\n", len(data), FormatTCPDump(data, 0))
-			if dryRun {
+			switch {
+			case goLiteral:
+				fmt.Printf("[go-literal] packet bytes (%d):\n%s\n", len(data), FormatGoBytesLiteral(data))
+				return nil
+			case cLiteral:
+				fmt.Printf("[c-literal] packet bytes (%d):\n%s\n", len(data), FormatCBytesLiteral(data))
+				return nil
+			case cppLiteral:
+				fmt.Printf("[cpp-literal] packet bytes (%d):\n%s\n", len(data), FormatCppBytesLiteral(data))
+				return nil
+			default:
+				fmt.Printf("[send] %d bytes:\n%s\n", len(data), FormatTCPDump(data, 0))
+				if effectiveDryRun {
+					return nil
+				}
 				return nil
 			}
-			return nil
 		}
 	}
 
@@ -614,7 +717,7 @@ func run(pslFile, pdlDir, iface string, dryRun bool, builtinProto bool, recv boo
 		drainDone      chan struct{}
 	)
 
-	if recv && !dryRun {
+	if recv && !effectiveDryRun {
 		drainDone = make(chan struct{})
 		var err error
 		receiver, err = packet.NewReceiver(iface, recvBpf)
@@ -655,7 +758,7 @@ func run(pslFile, pdlDir, iface string, dryRun bool, builtinProto bool, recv boo
 		}()
 	}
 
-	if !dryRun {
+	if !effectiveDryRun {
 		sender, err := packet.NewSender(iface)
 		if err != nil {
 			return fmt.Errorf("create sender: %w", err)
@@ -673,7 +776,7 @@ func run(pslFile, pdlDir, iface string, dryRun bool, builtinProto bool, recv boo
 	}
 
 	runErr := engine.Run(script, builder, sendFn)
-	if recv && !dryRun {
+	if recv && !effectiveDryRun {
 		sendPhaseEnded.Store(true)
 		// recv-count: wait until N drain-phase packets unless user set --recv-wait (then cap by time).
 		// Default recv-wait (1s) must not stop recv before N packets — that was the bug.
