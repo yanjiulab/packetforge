@@ -133,6 +133,8 @@ Notes:
 - Flow control:
   - `@repeat N` / `@repeat forever`
   - `@interval 100ms|1s|...`
+  - `@exit` (for packet stmt: exit script after this packet statement finishes)
+  - `@ignore` (stmt modifier, place after packet/block like `@interval`; skip executing that packet/block)
   - `async { ... }`
 - Constants: `const NAME = ...`
 - Builtins:
@@ -167,6 +169,12 @@ Run:
 
 ```bash
 pf -s examples/test.psl -i eth0
+```
+
+Directive demo:
+
+```bash
+pf -s examples/directives-ignore-exit.psl -d
 ```
 
 More examples are in `examples/`, and protocol definitions are in `proto/`.

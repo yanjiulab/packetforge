@@ -105,12 +105,16 @@ func (p *Parser) parseAsyncBlock() (Stmt, error) {
 	if err != nil {
 		return nil, err
 	}
-	repeat, interval, _, _, err := p.parseModifiers()
+	repeat, interval, _, _, exitAfter, ignore, err := p.parseModifiers()
 	if err != nil {
 		return nil, err
 	}
+	if exitAfter {
+		return nil, fmt.Errorf("@exit is only allowed for packet statements at %d:%d", p.tok.Line, p.tok.Col)
+	}
 	block.Repeat = repeat
 	block.Interval = interval
+	block.Ignore = ignore
 	block.Async = true
 	return block, nil
 }
@@ -121,12 +125,16 @@ func (p *Parser) parseBlock() (Stmt, error) {
 	if err != nil {
 		return nil, err
 	}
-	repeat, interval, _, _, err := p.parseModifiers()
+	repeat, interval, _, _, exitAfter, ignore, err := p.parseModifiers()
 	if err != nil {
 		return nil, err
 	}
+	if exitAfter {
+		return nil, fmt.Errorf("@exit is only allowed for packet statements at %d:%d", p.tok.Line, p.tok.Col)
+	}
 	block.Repeat = repeat
 	block.Interval = interval
+	block.Ignore = ignore
 	return block, nil
 }
 
@@ -150,7 +158,7 @@ func (p *Parser) parseBlockContent() (*BlockStmt, error) {
 }
 
 // parseModifiers parses optional @repeat / @interval, can be multi-line
-func (p *Parser) parseModifiers() (repeat int, interval Dur, fuzzRules []FuzzRule, fuzzCount int, err error) {
+func (p *Parser) parseModifiers() (repeat int, interval Dur, fuzzRules []FuzzRule, fuzzCount int, exitAfter bool, ignore bool, err error) {
 	repeat = 0
 	fuzzCount = 0
 	for {
@@ -193,13 +201,13 @@ func (p *Parser) parseModifiers() (repeat int, interval Dur, fuzzRules []FuzzRul
 		}
 		if p.at(TokFuzz) {
 			if !p.allowFuzz {
-				return 0, Dur{}, nil, 0, fmt.Errorf("@fuzz is only supported in pf fuzz mode at %d:%d", p.tok.Line, p.tok.Col)
+				return 0, Dur{}, nil, 0, false, false, fmt.Errorf("@fuzz is only supported in pf fuzz mode at %d:%d", p.tok.Line, p.tok.Col)
 			}
 			p.advance()
 			if p.at(TokIdent) && strings.EqualFold(p.tok.Raw, "count") {
 				p.advance()
 				if !p.at(TokNumber) {
-					return 0, Dur{}, nil, 0, fmt.Errorf("expected fuzz count number at %d:%d", p.tok.Line, p.tok.Col)
+					return 0, Dur{}, nil, 0, false, false, fmt.Errorf("expected fuzz count number at %d:%d", p.tok.Line, p.tok.Col)
 				}
 				n, _ := strconv.Atoi(p.tok.Raw)
 				fuzzCount = n
@@ -208,18 +216,35 @@ func (p *Parser) parseModifiers() (repeat int, interval Dur, fuzzRules []FuzzRul
 			}
 			layer, field, e := p.parseFuzzPath()
 			if e != nil {
-				return 0, Dur{}, nil, 0, e
+				return 0, Dur{}, nil, 0, false, false, e
 			}
 			mode, args, e := p.parseFuzzStrategy()
 			if e != nil {
-				return 0, Dur{}, nil, 0, e
+				return 0, Dur{}, nil, 0, false, false, e
 			}
 			fuzzRules = append(fuzzRules, FuzzRule{Layer: layer, Field: field, Mode: mode, Args: args})
 			continue
 		}
+		if p.at(TokExit) {
+			p.advance()
+			exitAfter = true
+			continue
+		}
+		if p.at(TokIgnore) {
+			if strings.TrimSpace(p.tok.Raw) != "" {
+				return 0, Dur{}, nil, 0, false, false, fmt.Errorf("@ignore does not take arguments at %d:%d", p.tok.Line, p.tok.Col)
+			}
+			p.advance()
+			ignore = true
+			continue
+		}
+		if p.at(TokComment) {
+			p.advance()
+			continue
+		}
 		break
 	}
-	return repeat, interval, fuzzRules, fuzzCount, nil
+	return repeat, interval, fuzzRules, fuzzCount, exitAfter, ignore, nil
 }
 
 // parsePacketStmt ::= Packet Modifiers?  (returns nil when no packet, does not consume modifiers)
@@ -231,11 +256,11 @@ func (p *Parser) parsePacketStmt() (Stmt, error) {
 	if packet == nil {
 		return nil, nil
 	}
-	repeat, interval, fuzzRules, fuzzCount, err := p.parseModifiers()
+	repeat, interval, fuzzRules, fuzzCount, exitAfter, ignore, err := p.parseModifiers()
 	if err != nil {
 		return nil, err
 	}
-	return &PacketStmt{Packet: packet, Repeat: repeat, Interval: interval, FuzzRules: fuzzRules, FuzzCount: fuzzCount}, nil
+	return &PacketStmt{Packet: packet, Repeat: repeat, Interval: interval, Ignore: ignore, Exit: exitAfter, FuzzRules: fuzzRules, FuzzCount: fuzzCount}, nil
 }
 
 func (p *Parser) parseFuzzPath() (string, string, error) {

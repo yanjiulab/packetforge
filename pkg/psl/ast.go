@@ -15,6 +15,8 @@ type PacketStmt struct {
 	Packet    *Packet
 	Repeat    int  // 0 = no repeat/once, >0 = count, -1 = forever
 	Interval  Dur  // Transmission interval
+	Ignore    bool // Skip this packet statement during execution
+	Exit      bool // Exit script after this packet statement finishes
 	FuzzRules []FuzzRule
 	FuzzCount int // 0 means auto based on rules
 }
@@ -25,6 +27,7 @@ func (*PacketStmt) stmt() {}
 type BlockStmt struct {
 	Stmts    []Stmt
 	Async    bool
+	Ignore   bool
 	Repeat   int
 	Interval Dur
 }

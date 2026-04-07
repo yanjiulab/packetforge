@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"errors"
 	"fmt"
 	"github.com/yanjiulab/packetforge/pkg/packet"
 	"github.com/yanjiulab/packetforge/pkg/psl"
@@ -8,10 +9,15 @@ import (
 	"time"
 )
 
+var errExitAfterPacket = errors.New("exit after packet")
+
 // Run executes the PSL script: parsing and sending packets periodically/parallelly as requested
 func Run(script *psl.Script, builder *packet.Builder, sendFn func([]byte) error) error {
 	for _, stmt := range script.Stmts {
 		if err := runStmt(stmt, builder, sendFn); err != nil {
+			if errors.Is(err, errExitAfterPacket) {
+				return nil
+			}
 			return err
 		}
 	}
@@ -30,6 +36,9 @@ func runStmt(stmt psl.Stmt, builder *packet.Builder, sendFn func([]byte) error) 
 }
 
 func runPacketStmt(s *psl.PacketStmt, builder *packet.Builder, sendFn func([]byte) error) error {
+	if s.Ignore {
+		return nil
+	}
 	repeat := s.Repeat
 	if repeat == 0 {
 		repeat = 1
@@ -53,10 +62,16 @@ func runPacketStmt(s *psl.PacketStmt, builder *packet.Builder, sendFn func([]byt
 			break
 		}
 	}
+	if s.Exit {
+		return errExitAfterPacket
+	}
 	return nil
 }
 
 func runBlockStmt(s *psl.BlockStmt, builder *packet.Builder, sendFn func([]byte) error) error {
+	if s.Ignore {
+		return nil
+	}
 	if s.Async {
 		go func() {
 			_ = runBlockSync(s, builder, sendFn)
@@ -78,6 +93,9 @@ func runBlockSync(s *psl.BlockStmt, builder *packet.Builder, sendFn func([]byte)
 		}
 		for _, stmt := range s.Stmts {
 			if err := runStmt(stmt, builder, sendFn); err != nil {
+				if errors.Is(err, errExitAfterPacket) {
+					return err
+				}
 				return err
 			}
 		}
@@ -99,6 +117,9 @@ func RunAsync(script *psl.Script, builder *packet.Builder, sendFn func([]byte) e
 			}(blk)
 		} else {
 			if err := runStmt(stmt, builder, sendFn); err != nil {
+				if errors.Is(err, errExitAfterPacket) {
+					return nil
+				}
 				return err
 			}
 		}

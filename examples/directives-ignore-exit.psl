@@ -1,0 +1,26 @@
+// Demonstrate @ignore and @exit directives.
+const SRC = 10.0.0.1
+const DST = 10.0.0.2
+
+[
+  eth()
+  ip(src=SRC, dst=DST, id=1)
+  udp(sport=12345, dport=9000)
+  `first packet then exit`
+]
+@ignore
+
+[
+  eth()
+  ip(src=SRC, dst=DST, id=2)
+  udp(sport=12345, dport=9001)
+  `send then exit`
+]
+@exit
+
+[
+  eth()
+  ip(src=SRC, dst=DST, id=2)
+  udp(sport=12345, dport=9001)
+  `this should never be sent`
+]

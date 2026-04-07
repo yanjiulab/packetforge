@@ -29,6 +29,8 @@ const (
 	TokForever
 	TokRepeat
 	TokInterval
+	TokExit
+	TokIgnore
 	TokFuzz
 	TokComment
 	TokUnit   // ns, us, ms, s
@@ -177,8 +179,22 @@ func (l *Lexer) lexAt(line, col int) Token {
 	if raw == "@interval" {
 		return Token{Kind: TokInterval, Raw: raw, Line: line, Col: col}
 	}
+	if raw == "@exit" {
+		return Token{Kind: TokExit, Raw: raw, Line: line, Col: col}
+	}
 	if raw == "@fuzz" {
 		return Token{Kind: TokFuzz, Raw: raw, Line: line, Col: col}
+	}
+	if raw == "@ignore" {
+		for l.pos < len(l.src) && (l.src[l.pos] == ' ' || l.src[l.pos] == '\t') {
+			l.pos++
+		}
+		start := l.pos
+		for l.pos < len(l.src) && l.src[l.pos] != '\n' {
+			l.pos++
+		}
+		l.col = col + (l.pos - l.start)
+		return Token{Kind: TokIgnore, Raw: l.src[start:l.pos], Line: line, Col: col}
 	}
 	return Token{Kind: TokAt, Raw: raw, Line: line, Col: col}
 }
